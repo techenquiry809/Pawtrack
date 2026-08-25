@@ -25,7 +25,7 @@ import { colors, fontSize, radius, spacing } from '@/theme/tokens';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 import { useSeizureTimer } from '@/hooks/useSeizureTimer';
-import { recordSeizureVideo } from '@/services/videoService';
+import { deleteVideoFile, recordSeizureVideo } from '@/services/videoService';
 import * as seizureRepo from '@/db/seizureRepo';
 import { formatClock } from '@/utils/time';
 import {
@@ -48,7 +48,11 @@ export default function LiveSeizureScreen() {
   const [clusterCount, setClusterCount] = useState(0);
   const [recording, setRecording] = useState(false);
 
-  const startedAt = draft?.startedAt ?? Date.now();
+  // Falls back to the mount time so the hooks below keep a stable argument if
+  // the draft is momentarily null (e.g. mid-discard). Must NOT be `Date.now()`
+  // inline — that changes every render and restarts the timer's interval.
+  const [mountedAt] = useState(() => Date.now());
+  const startedAt = draft?.startedAt ?? mountedAt;
   const { elapsed, level } = useSeizureTimer({
     startedAt,
     warnMinutes: settings.thresholdWarnMin,
@@ -57,31 +61,53 @@ export default function LiveSeizureScreen() {
   });
 
   // Check for a possible cluster once, when the screen mounts.
+  // Depend on the primitive start time, NOT on `draft` — the draft object is
+  // replaced on every chip tap, which would re-run this query dozens of times
+  // during a seizure.
+  const dogId = dog?.id;
   useEffect(() => {
-    if (!draft || !dog) return;
+    if (!dogId) return;
+    let cancelled = false;
     seizureRepo
-      .countSeizuresInWindow(dog.id, draft.startedAt, settings.clusterWindowHrs)
-      .then(setClusterCount)
+      .countSeizuresInWindow(dogId, startedAt, settings.clusterWindowHrs)
+      .then((n) => {
+        if (!cancelled) setClusterCount(n);
+      })
       .catch((e) => console.error('[live] cluster check failed', e));
-  }, [draft, dog, settings.clusterWindowHrs]);
+    return () => {
+      cancelled = true;
+    };
+  }, [dogId, startedAt, settings.clusterWindowHrs]);
+
+  const pendingVideos = draft?.pendingVideos;
 
   const onCancel = useCallback(() => {
+    const videoCount = pendingVideos?.length ?? 0;
     Alert.alert(
       'Discard this recording?',
-      'The timer will stop and nothing will be saved.',
+      videoCount > 0
+        ? `The timer will stop, and the ${videoCount} video${videoCount === 1 ? '' : 's'} you recorded will be deleted. Nothing will be saved.`
+        : 'The timer will stop and nothing will be saved.',
       [
         { text: 'Keep timing', style: 'cancel' },
         {
           text: 'Discard',
           style: 'destructive',
           onPress: () => {
+            // Videos were copied into permanent app storage the moment they
+            // were captured. Discarding the seizure has to remove them too, or
+            // they sit on the phone forever with no record pointing at them
+            // and no screen that can delete them.
+            for (const video of pendingVideos ?? []) {
+              deleteVideoFile(video.fileUri);
+            }
             cancel();
             router.replace('/(tabs)');
           },
         },
       ],
     );
-  }, [cancel, router]);
+  }, [cancel, router, pendingVideos]);
 
   const onRecordVideo = async () => {
     setRecording(true);
@@ -111,10 +137,18 @@ export default function LiveSeizureScreen() {
       );
       return;
     }
-    const url = `tel:${phone}`;
-    const supported = await Linking.canOpenURL(url);
-    if (supported) await Linking.openURL(url);
-    else Alert.alert('Calling is not available on this device.');
+    // Do NOT gate this on Linking.canOpenURL: on Android 11+ it returns false
+    // for `tel:` unless the app declares a <queries> intent, which would make
+    // the emergency-vet button silently refuse to dial. Attempt the call and
+    // only report a failure if the OS actually rejects it.
+    try {
+      await Linking.openURL(`tel:${phone}`);
+    } catch {
+      Alert.alert(
+        'Could not start the call',
+        `Dial ${phone} from your phone app.`,
+      );
+    }
   };
 
   if (!draft || !dog) {

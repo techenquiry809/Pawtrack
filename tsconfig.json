@@ -9,5 +9,11 @@
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    // Node build tooling, not app code. It is excluded rather than typed
+    // because pulling in @types/node changes setTimeout's return type across
+    // the whole React Native codebase. Run it with `npx tsx`.
+    "scripts"
+  ]
 }

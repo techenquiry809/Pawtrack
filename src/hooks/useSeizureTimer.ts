@@ -19,6 +19,9 @@ import { elapsedSeconds, useActiveSeizure } from '@/store/activeSeizureStore';
 
 export type ThresholdLevel = 'none' | 'warn' | 'critical';
 
+/** Shared empty array — see the selector note in useSeizureTimer. */
+const NO_THRESHOLDS: readonly number[] = [];
+
 type Options = {
   startedAt: number;
   warnMinutes: number;
@@ -36,7 +39,14 @@ export function useSeizureTimer({
   useKeepAwake();
 
   const [elapsed, setElapsed] = useState(() => elapsedSeconds(startedAt));
-  const firedThresholds = useActiveSeizure((s) => s.draft?.firedThresholds ?? []);
+  // NOTE: this selector must return a value that is reference-stable between
+  // store updates. Zustand v5 calls it on every render and compares with
+  // Object.is, so `s.draft?.firedThresholds ?? []` would hand React a brand
+  // new array each time and spin into "Maximum update depth exceeded" the
+  // moment the draft is cleared. Hence the module-level constant.
+  const firedThresholds = useActiveSeizure(
+    (s) => s.draft?.firedThresholds ?? NO_THRESHOLDS,
+  );
   const markThresholdFired = useActiveSeizure((s) => s.markThresholdFired);
   const appState = useRef<AppStateStatus>(AppState.currentState);
 

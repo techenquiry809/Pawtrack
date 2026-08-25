@@ -10,18 +10,25 @@
  * time. Do not "fix" this by comparing wall-clock components.
  */
 
-/** '2m 14s' / '45s' — for display in lists and stats. */
+/**
+ * '2m 14s' / '45s' — for display in lists and stats.
+ *
+ * Rounds to whole seconds FIRST. Rounding the remainder instead produces
+ * '1m 60s' for 119.6 seconds, which reads as a bug on a vet report.
+ */
 export function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null) return '—';
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
+  if (seconds == null || !Number.isFinite(seconds)) return '—';
+  const total = Math.max(0, Math.round(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
 /** '02:14' — for the running timer. Always zero-padded, stable width. */
 export function formatClock(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
@@ -29,6 +36,20 @@ export function formatClock(seconds: number): string {
 export function startOfDay(epochMs: number): number {
   const d = new Date(epochMs);
   d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * Start of the local day AFTER the one containing `epochMs`.
+ *
+ * Not `startOfDay(x) + DAY_MS`: on a daylight-saving change a local day is 23
+ * or 25 hours long, so the fixed offset lands an hour inside the wrong day and
+ * a check-in saved near midnight can be missed or double-counted.
+ */
+export function startOfNextDay(epochMs: number): number {
+  const d = new Date(epochMs);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 1);
   return d.getTime();
 }
 

@@ -7,7 +7,7 @@
  */
 
 import { getDb, uid, toSqlBool, fromSqlBool } from './client';
-import { startOfDay, DAY_MS } from '@/utils/time';
+import { startOfDay, startOfNextDay } from '@/utils/time';
 import type { DailyCheckin } from '@/types/domain';
 
 type CheckinRow = {
@@ -44,10 +44,10 @@ const rowToCheckin = (r: CheckinRow): DailyCheckin => ({
 
 export async function getTodaysCheckin(dogId: string): Promise<DailyCheckin | null> {
   const db = await getDb();
-  const dayStart = startOfDay(Date.now());
+  const now = Date.now();
   const row = await db.getFirstAsync<CheckinRow>(
     'SELECT * FROM daily_checkins WHERE dog_id = ? AND timestamp >= ? AND timestamp < ? LIMIT 1',
-    [dogId, dayStart, dayStart + DAY_MS],
+    [dogId, startOfDay(now), startOfNextDay(now)],
   );
   return row ? rowToCheckin(row) : null;
 }

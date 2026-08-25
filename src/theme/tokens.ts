@@ -30,6 +30,37 @@ export const colors = {
   greenInk: '#2E5A37',
 } as const;
 
+/**
+ * DATA-ENCODING palette — distinct from the brand colours above, on purpose.
+ *
+ * These three hues carry meaning in the Timeline (which event happened) rather
+ * than decorating a surface, so they were validated rather than eyeballed:
+ *
+ *   node scripts/validate_palette.js "#C63F35,#B8801F,#0090A0" --mode light
+ *   -> lightness band PASS · chroma floor PASS · CVD separation PASS
+ *      (deutan dE 8.1) · normal-vision floor PASS (dE 15.0) · contrast PASS
+ *
+ * The original spec paired RED with GREEN, which fails hard: deuteranopic
+ * separation dE 5.1 makes a seizure dot and a medication dot nearly identical
+ * for red-green colour-blind readers — roughly 1 in 12 men. Amber replaces
+ * green, which also frees green to stay a reserved STATUS colour ("Done") and
+ * not double as a category.
+ *
+ * The teal here is more chromatic than colors.teal because the brand teal
+ * measures 0.076 chroma and reads as grey at dot size. A small hue difference
+ * between a 10px dot and a button is a fair trade for a legible encoding.
+ *
+ * NEVER rely on these alone: every event also carries a glyph and a text
+ * label. Colour is the redundant channel, not the only one.
+ */
+export const eventColors = {
+  seizure: '#C63F35',
+  medication: '#B8801F',
+  checkin: '#0090A0',
+} as const;
+
+export type EventKind = keyof typeof eventColors;
+
 export const radius = {
   sm: 12,
   md: 18,

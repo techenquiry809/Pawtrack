@@ -13,6 +13,9 @@
  */
 
 import { z } from 'zod';
+import { DURATION_CONFIDENCES, MAX_PLAUSIBLE_SEIZURE_SECONDS } from '@/utils/clock';
+
+export type { DurationConfidence } from '@/utils/clock';
 
 /* ------------------------------------------------------------------ */
 /* Structured observation vocabularies                                 */
@@ -92,8 +95,16 @@ export const BreedSchema = z.object({
   breedName: z.string(),
   /** Provenance of the standardized value, e.g. 'curated-v1'. */
   breedSource: z.string(),
-  /** Owner's own words. Used with 'Mixed Breed' and 'Other'. */
-  userEnteredDescription: z.string(),
+  /**
+   * Owner's own words. Used with 'Mixed Breed' and 'Other'.
+   *
+   * CAPPED ON PURPOSE. This is the only owner-controlled string on the breed
+   * picker, and it is destined for a generated vet report. When that report
+   * ships as HTML through expo-print, this value must ALSO be escaped at
+   * render — an unescaped `<` in a PDF template is an injection vector, and a
+   * length cap alone does not close it.
+   */
+  userEnteredDescription: z.string().max(200),
 });
 export type Breed = z.infer<typeof BreedSchema>;
 
@@ -208,9 +219,27 @@ export const SeizureContextSchema = z.object({
 });
 export type SeizureContext = z.infer<typeof SeizureContextSchema>;
 
+/**
+ * Lifecycle of the seizure RECORD — not a clinical field, and never shown to
+ * the owner as one. The row is inserted `in_progress` on the first tap so a
+ * crash cannot lose it; only `complete` rows may reach history or a vet report.
+ */
+export const SEIZURE_STATUSES = ['in_progress', 'complete', 'abandoned'] as const;
+export type SeizureStatus = (typeof SEIZURE_STATUSES)[number];
+
+export const SeizureStatusSchema = z.enum(SEIZURE_STATUSES);
+export const DurationConfidenceSchema = z.enum(DURATION_CONFIDENCES);
+
 export const SeizureSchema = z.object({
   id: z.string(),
   dogId: z.string(),
+
+  status: SeizureStatusSchema,
+  durationConfidence: DurationConfidenceSchema,
+  /** Last phase transition written. Powers honest crash-recovery durations. */
+  lastTouchedAt: z.number().nullable(),
+  /** Minutes ahead of UTC at capture time, e.g. Kathmandu = 345. */
+  tzOffsetMin: z.number().nullable(),
 
   /** Epoch ms. ALWAYS the source of truth — never a UI tick counter. */
   start: z.number(),
@@ -247,6 +276,45 @@ export const SeizureSchema = z.object({
   updatedAt: z.number(),
 });
 export type Seizure = z.infer<typeof SeizureSchema>;
+
+/**
+ * The finalize gate — the last point a bad duration can be stopped before it
+ * becomes a fact a vet reads.
+ *
+ * Every rule here is a REFUSAL, never a correction. A silently repaired
+ * duration is indistinguishable from a measured one in an export; a refusal
+ * produces a question, a correction produces a false fact.
+ */
+export const SeizureFinalizeSchema = z
+  .object({
+    durationSeconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_PLAUSIBLE_SEIZURE_SECONDS)
+      .nullable(),
+    durationConfidence: DurationConfidenceSchema,
+  })
+  .superRefine((value, ctx) => {
+    // "We don't know how long" paired with "we're confident" is a
+    // contradiction that would let an unreliable row pass as a good one.
+    if (value.durationSeconds === null && value.durationConfidence === 'high') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['durationConfidence'],
+        message: 'A missing duration cannot be high confidence. Use "unreliable".',
+      });
+    }
+    // A zero-second seizure is a double-tap, not an event.
+    if (value.durationSeconds === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['durationSeconds'],
+        message: 'A zero-second seizure is a mis-tap. Discard the record instead.',
+      });
+    }
+  });
+export type SeizureFinalize = z.infer<typeof SeizureFinalizeSchema>;
 
 /** A seizure joined with its videos, for detail and edit screens. */
 export type SeizureWithVideos = Seizure & { videos: Video[] };

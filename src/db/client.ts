@@ -15,10 +15,18 @@ let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
-    dbPromise = SQLite.openDatabaseAsync(DB_NAME).then(async (db) => {
-      await runMigrations(db);
-      return db;
-    });
+    dbPromise = SQLite.openDatabaseAsync(DB_NAME)
+      .then(async (db) => {
+        await runMigrations(db);
+        return db;
+      })
+      .catch((error) => {
+        // Do not leave a rejected promise cached: every later getDb() would
+        // reuse it and fail forever, even if the original problem was
+        // transient. Clearing the handle lets a retry actually retry.
+        dbPromise = null;
+        throw error;
+      });
   }
   return dbPromise;
 }

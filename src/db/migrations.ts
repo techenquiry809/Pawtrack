@@ -162,6 +162,51 @@ const migrations: Migration[] = [
       `);
     },
   },
+
+  {
+    version: 3,
+    name: 'seizure record durability',
+    up: async (db) => {
+      // Makes SQLite the source of truth from the first tap, so a force-quit
+      // or OS memory kill mid-seizure cannot lose the record.
+      //
+      // DEFAULT 'complete' on status is what backfills existing rows
+      // correctly: every row that already exists was written by the old
+      // finalize-only path, so it is by definition finished. Get this wrong
+      // and every historical seizure disappears from history.
+      await db.execAsync(`
+        -- Lifecycle of the RECORD, not a clinical field.
+        --   in_progress : row exists, seizure is being captured right now
+        --   complete    : owner finished the flow; safe for history + exports
+        --   abandoned   : owner explicitly discarded it
+        ALTER TABLE seizures ADD COLUMN status TEXT NOT NULL DEFAULT 'complete';
+
+        -- How far duration_sec on this row can be trusted.
+        --   high            : monotonic and wall clocks agreed
+        --   clock_corrected : they disagreed; the monotonic value was used
+        --   recovered       : reconstructed after a crash; end time is an estimate
+        --   unreliable      : could not be derived; duration_sec is 0/NULL
+        --   legacy          : written before this migration existed
+        ALTER TABLE seizures
+          ADD COLUMN duration_confidence TEXT NOT NULL DEFAULT 'legacy';
+
+        -- Updated on every phase transition. After a crash this is our best
+        -- estimate of when capture actually stopped — far better than "now",
+        -- which would report a 6-hour seizure if the owner finds the orphaned
+        -- row the next morning.
+        ALTER TABLE seizures ADD COLUMN last_touched_at INTEGER;
+
+        -- Minutes ahead of UTC at the moment of capture, so a past record
+        -- still renders in the timezone it happened in after the owner travels.
+        ALTER TABLE seizures ADD COLUMN tz_offset_min INTEGER;
+
+        -- Supports the two hot queries: the orphan lookup on launch, and every
+        -- history/analytics query, which must now filter out partial rows.
+        CREATE INDEX IF NOT EXISTS idx_seizures_status_start
+          ON seizures (status, start DESC);
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {
@@ -181,10 +226,15 @@ export async function runMigrations(db: SQLiteDatabase): Promise<void> {
     if (migration.version <= current) continue;
     await db.withTransactionAsync(async () => {
       await migration.up(db);
+      // The version bump MUST be inside the same transaction as the schema
+      // change. If it were written afterwards and the app died in between,
+      // the next launch would replay the migration against tables that
+      // already exist and the app would fail to start, permanently.
+      //
+      // PRAGMA cannot be parameterised, and the value is an integer literal
+      // from our own code, so interpolation is safe here.
+      await db.execAsync(`PRAGMA user_version = ${migration.version}`);
     });
-    // PRAGMA cannot be parameterised, and the value is an integer literal
-    // from our own code, so interpolation is safe here.
-    await db.execAsync(`PRAGMA user_version = ${migration.version}`);
   }
 }
 

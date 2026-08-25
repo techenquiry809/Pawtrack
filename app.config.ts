@@ -27,6 +27,13 @@ const config: ExpoConfig = {
     bundleIdentifier: BUNDLE_ID,
     // iOS shows these strings in the permission dialog. Apple REJECTS apps
     // whose strings are vague, so each one names the concrete user benefit.
+    //
+    // KEEP ALL THREE. They look like they belong to expo-camera, which has no
+    // importers — but they are required by expo-image-picker, which IS used:
+    // src/services/videoService.ts calls launchCameraAsync() to record a
+    // seizure. iOS hard-crashes an app that touches the camera without a usage
+    // string, so deleting these alongside the expo-camera plugin entry would
+    // crash the one feature owners use mid-emergency.
     infoPlist: {
       NSCameraUsageDescription:
         "Paws Journal uses the camera so you can record video of your dog's seizure to show your veterinarian.",
@@ -34,9 +41,12 @@ const config: ExpoConfig = {
         "Paws Journal records audio with seizure videos, because vocalisation can be clinically relevant.",
       NSPhotoLibraryUsageDescription:
         'Paws Journal lets you attach a video you already recorded to a seizure record.',
-      // The seizure timer must keep running while the phone is in the owner's
-      // pocket or face-down next to the dog.
-      UIBackgroundModes: ['audio'],
+      // NOTE: there is deliberately NO UIBackgroundModes entry here.
+      // The seizure timer does not need one — elapsed time is derived from an
+      // absolute start timestamp and recomputed the instant the app returns to
+      // the foreground, so suspending JS costs nothing. Declaring the `audio`
+      // background mode without actually playing audio does not keep the timer
+      // running and is a documented App Review rejection (guideline 2.5.4).
     },
   },
 
@@ -48,42 +58,45 @@ const config: ExpoConfig = {
       backgroundImage: './assets/android-icon-background.png',
       monochromeImage: './assets/android-icon-monochrome.png',
     },
+    // Same rule as infoPlist above: the first three serve expo-image-picker's
+    // camera launch, not expo-camera. VIBRATE serves expo-haptics on the live
+    // seizure screen.
+    //
+    // POST_NOTIFICATIONS and SCHEDULE_EXACT_ALARM were removed: nothing
+    // schedules a notification yet, and SCHEDULE_EXACT_ALARM is a
+    // policy-restricted permission that requires a Play Console declaration
+    // form. Add them back in the same PR as the medication reminders.
     permissions: [
       'CAMERA',
       'RECORD_AUDIO',
       'READ_MEDIA_VIDEO',
-      'POST_NOTIFICATIONS',
-      'SCHEDULE_EXACT_ALARM',
       'VIBRATE',
     ],
   },
 
+  /**
+   * RULE: native configuration lands in the SAME PR as the feature that needs
+   * it, never ahead of it. Scaffolding that costs nothing in a web app costs a
+   * review cycle in a mobile one — Apple checks that declared permissions
+   * correspond to functionality that exists (guideline 5.1.1), and Google Play
+   * treats an over-broad Data Safety declaration as a policy violation in the
+   * other direction.
+   *
+   * Removed until they have real importers:
+   *   expo-camera        — no imports; video capture goes through
+   *                        expo-image-picker's system camera by design
+   *   expo-notifications — nothing schedules a notification yet
+   *
+   * expo-print and expo-sharing are installed but were never plugin-configured,
+   * so there is nothing to remove; they earn entries when the vet report ships.
+   */
   plugins: [
     'expo-router',
-    [
-      'expo-camera',
-      {
-        cameraPermission:
-          "Paws Journal uses the camera so you can record your dog's seizure for your veterinarian.",
-        microphonePermission:
-          'Paws Journal records audio with seizure videos, because vocalisation can be clinically relevant.',
-        recordAudioAndroid: true,
-      },
-    ],
     [
       'expo-image-picker',
       {
         photosPermission:
           'Paws Journal lets you attach a video you already recorded to a seizure record.',
-      },
-    ],
-    [
-      'expo-notifications',
-      {
-        // Local notifications only — medication and check-in reminders.
-        // There is no push server; nothing leaves the device.
-        icon: './assets/icon.png',
-        color: '#2F7E86',
       },
     ],
     'expo-sqlite',

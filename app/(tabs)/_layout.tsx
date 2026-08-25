@@ -9,6 +9,7 @@
 import { Redirect, Tabs } from 'expo-router';
 import { Text } from 'react-native';
 import { useAppStore } from '@/store/appStore';
+import { UnfinishedSeizurePrompt } from '@/components/UnfinishedSeizurePrompt';
 import { colors, fontSize } from '@/theme/tokens';
 
 /**
@@ -30,54 +31,60 @@ export default function TabsLayout() {
   }
 
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.tealDeep,
-        tabBarInactiveTintColor: colors.inkSoft,
-        tabBarStyle: {
-          backgroundColor: colors.bg,
-          borderTopColor: colors.line,
-        },
-        tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: '600' },
-        sceneStyle: { backgroundColor: colors.bg },
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="🏠" focused={focused} />,
+    <>
+      {/* Mounted once at the tab shell so it catches an orphaned recording on
+          cold launch AND on every return to the foreground. */}
+      <UnfinishedSeizurePrompt />
+
+      <Tabs
+        screenOptions={{
+          headerShown: false,
+          tabBarActiveTintColor: colors.tealDeep,
+          tabBarInactiveTintColor: colors.inkSoft,
+          tabBarStyle: {
+            backgroundColor: colors.bg,
+            borderTopColor: colors.line,
+          },
+          tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: '600' },
+          sceneStyle: { backgroundColor: colors.bg },
         }}
-      />
-      <Tabs.Screen
-        name="timeline"
-        options={{
-          title: 'Timeline',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="🕑" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="history"
-        options={{
-          title: 'History',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="📋" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="analytics"
-        options={{
-          title: 'Patterns',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="📈" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="more"
-        options={{
-          title: 'More',
-          tabBarIcon: ({ focused }) => <TabIcon symbol="⋯" focused={focused} />,
-        }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'Home',
+            tabBarIcon: ({ focused }) => <TabIcon symbol="🏠" focused={focused} />,
+          }}
+        />
+        <Tabs.Screen
+          name="timeline"
+          options={{
+            title: 'Timeline',
+            tabBarIcon: ({ focused }) => <TabIcon symbol="🕑" focused={focused} />,
+          }}
+        />
+        <Tabs.Screen
+          name="history"
+          options={{
+            title: 'History',
+            tabBarIcon: ({ focused }) => <TabIcon symbol="📋" focused={focused} />,
+          }}
+        />
+        <Tabs.Screen
+          name="analytics"
+          options={{
+            title: 'Patterns',
+            tabBarIcon: ({ focused }) => <TabIcon symbol="📈" focused={focused} />,
+          }}
+        />
+        <Tabs.Screen
+          name="more"
+          options={{
+            title: 'More',
+            tabBarIcon: ({ focused }) => <TabIcon symbol="⋯" focused={focused} />,
+          }}
+        />
+      </Tabs>
+    </>
   );
 }

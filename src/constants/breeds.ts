@@ -1,32 +1,191 @@
 /**
- * Standardized dog breed list (235 breeds).
+ * Standardized dog breed catalogue.
  *
  * WHY THIS EXISTS: breed must never be free text. If owners type it, the
- * dataset fills with 'Golden Retreiver', 'golden retriver', 'Golder Retriever'
- * and becomes ungroupable. Selection from this list guarantees one canonical
- * spelling per breed, with a stable slug id that survives display-name edits.
+ * dataset fills with 'Golden Retreiver', 'golden retriver' and 'Golder
+ * Retriever' and becomes ungroupable. Selection from this list guarantees one
+ * canonical spelling per breed, with a stable slug that survives display-name
+ * edits.
  *
- * SPECIAL VALUES: 'Mixed Breed', 'Unknown' and 'Other' are always offered
- * alongside the list. Each pairs with a free-text description stored
- * separately in Breed.userEnteredDescription, so we keep both the groupable
- * standardized value and the owner's own words.
+ * WHY IT IS NOT COSMETIC: median age of onset for canine idiopathic epilepsy
+ * is around 2.5 years, and predisposition is documented for a specific set of
+ * breeds. This value ends up on a vet report beside a date of birth and a
+ * seizure history, so it is clinical context, not decoration.
  *
- * FUTURE ANALYTICS CAVEAT: you may report 'most frequently reported breeds in
- * our dataset'. You may NOT report prevalence or risk — that needs
- * population-level denominator data this app does not have.
+ * WHY IT IS BUNDLED, NOT FETCHED: the app is offline-first. A breed picker
+ * that needs a network call fails in a vet's basement.
+ *
+ * ── PROVENANCE: READ BEFORE TRUSTING THE COUNT ────────────────────────
+ * This list holds 235 breeds under the source tag 'curated-v1', and that
+ * number matches no registry: the FCI recognises ~350 and the AKC ~277. It is
+ * a hand-curated list of unknown origin.
+ *
+ * Its SHAPE, however, is clearly AKC-derived, not FCI:
+ *   - Belgian Shepherd is split into Malinois / Sheepdog / Tervuren, which is
+ *     AKC practice; the FCI treats them as one breed with four varieties.
+ *   - Poodle is split into Standard / Miniature / Toy, likewise AKC.
+ *
+ * So if you replace it, target AKC nomenclature (e.g. tmfilho/akcdata, 277
+ * breeds) rather than FCI, or every stored breed_id from this list breaks.
+ * See scripts/build-breeds.ts, and check the source licence first: breed names
+ * are facts and not copyrightable, but a compiled database can carry sui
+ * generis database rights in the EU.
+ *
+ * KNOWN DEFECT: 'cocker-spaniel', 'american-cocker-spaniel' and
+ * 'english-cocker-spaniel' all exist. AKC recognises only the first (which IS
+ * the American) and the third. The middle one is a duplicate concept and
+ * should be merged when the list is regenerated — not deleted by hand, since
+ * a stored breed_id pointing at it would be orphaned.
  */
 
+/** Provenance of the standardized value. Surfaced in the picker footer. */
 export const BREED_SOURCE = 'curated-v1';
 
-export type BreedOption = { breedId: string; breedName: string };
+export type BreedKind = 'standard' | 'mixed' | 'unknown' | 'other';
 
+export type BreedOption = {
+  /** Stable slug. This is what SQLite stores in dogs.breed_id. */
+  breedId: string;
+  /**
+   * Canonical stored name. NEVER reword these — they are written verbatim to
+   * the database, so a rename orphans every historical record that used it.
+   * For display, prefer `pickerLabel` where one is set.
+   */
+  breedName: string;
+  kind?: BreedKind;
+  /** Friendlier label for the picker only. Never stored. */
+  pickerLabel?: string;
+};
+
+/**
+ * Pinned to the TOP of the picker, not buried under 235 alphabetical entries.
+ *
+ * Mixed and unknown-origin dogs — often the rescues whose owners most need
+ * this app — should not have to scroll past Affenpinscher to find themselves.
+ *
+ * NOTE the split between `breedName` and `pickerLabel`. "I don't know" reads
+ * far better than "Unknown" on screen, but 'Unknown' is what already sits in
+ * the database and in breedDisplay(), so the stored string does not move.
+ */
 export const SPECIAL_BREEDS: BreedOption[] = [
-  { breedId: 'mixed-breed', breedName: 'Mixed Breed' },
-  { breedId: 'unknown', breedName: 'Unknown' },
-  { breedId: 'other', breedName: 'Other' },
+  {
+    breedId: 'mixed-breed',
+    breedName: 'Mixed Breed',
+    pickerLabel: 'Mixed breed',
+    kind: 'mixed',
+  },
+  {
+    breedId: 'unknown',
+    breedName: 'Unknown',
+    pickerLabel: "I don't know",
+    kind: 'unknown',
+  },
+  {
+    breedId: 'other',
+    breedName: 'Other',
+    pickerLabel: 'Something else',
+    kind: 'other',
+  },
 ];
 
-export const BREED_LIST: BreedOption[] = [
+/**
+ * Alternate names people actually type. Searched, never displayed.
+ *
+ * Kept as a map rather than a field on each entry because the two have
+ * different lifecycles: BREED_LIST is generated from a registry, while these
+ * are hand-curated from what real owners type. Regenerating one must not
+ * clobber the other.
+ *
+ * Add to this every time a support ticket reveals a new one.
+ */
+export const BREED_ALIASES: Record<string, string[]> = {
+  'german-shepherd-dog': ['alsatian', 'gsd', 'german shepard'],
+  dachshund: ['sausage dog', 'wiener dog', 'doxie', 'teckel'],
+  'labrador-retriever': ['lab', 'labrador'],
+  'golden-retriever': ['golden', 'goldie'],
+  'belgian-malinois': ['malinois', 'mal'],
+  'belgian-tervuren': ['tervuren', 'terv'],
+  'belgian-sheepdog': ['groenendael'],
+  'staffordshire-bull-terrier': ['staffy', 'staffie'],
+  'yorkshire-terrier': ['yorkie'],
+  rottweiler: ['rottie'],
+  'doberman-pinscher': ['dobermann', 'dobie'],
+  'west-highland-white-terrier': ['westie'],
+  'cavalier-king-charles-spaniel': ['cavalier', 'ckcs'],
+  'shetland-sheepdog': ['sheltie'],
+  'pembroke-welsh-corgi': ['corgi'],
+  'chinese-shar-pei': ['shar pei', 'sharpei'],
+  'bichon-frise': ['bichon'],
+  'mixed-breed': ['mutt', 'crossbreed', 'cross breed', 'mongrel', 'mix'],
+  unknown: ['not sure', 'unsure', 'no idea', 'dont know', "don't know"],
+  other: ['not listed', 'something else'],
+};
+
+/**
+ * Shown above the full list before the owner types anything. Most people
+ * finish here.
+ *
+ * Ordered by documented epilepsy prevalence, NOT general popularity — the
+ * population installing a seizure tracker is not the general dog population.
+ * The ordering is invisible; it just means the breed they need is usually
+ * already on screen.
+ */
+export const QUICK_PICK_IDS: string[] = [
+  'labrador-retriever',
+  'golden-retriever',
+  'border-collie',
+  'german-shepherd-dog',
+  'beagle',
+  'boxer',
+  'cocker-spaniel',
+  'bernese-mountain-dog',
+  'dachshund',
+  'belgian-tervuren',
+  'english-springer-spaniel',
+  'vizsla',
+];
+
+/**
+ * Breeds with published evidence of predisposition to idiopathic epilepsy.
+ *
+ * Sources: Cornell Riney Canine Health Center; International Veterinary
+ * Epilepsy Task Force consensus (BMC Vet Res, 2015).
+ *
+ * *** PRODUCT DECISION: NEVER RENDER THIS IN THE PICKER. ***
+ *
+ * Badging a breed "epilepsy-prone" during onboarding does two harmful things:
+ * it alarms an owner who has no diagnosis yet, and it edges the app toward
+ * implying one. This is population-level epidemiology — it says nothing about
+ * the dog in front of you, and a frightened owner will not read it that way.
+ * It is also the single clearest way to violate the rule at the top of
+ * docs/ARCHITECTURE.md.
+ *
+ * Legitimate uses: ordering QUICK_PICK_IDS above, and an aggregate research
+ * export with explicit consent. Nothing else.
+ *
+ * NOTE ON BELGIAN BREEDS: the genetic evidence names the Belgian Tervuren
+ * specifically. Because this list is AKC-shaped, that is 'belgian-tervuren'
+ * and not the FCI's merged 'belgian-shepherd-dog', which does not exist here.
+ */
+export const EPILEPSY_PREDISPOSED: ReadonlySet<string> = new Set([
+  'beagle',
+  'belgian-tervuren',
+  'bernese-mountain-dog',
+  'border-collie',
+  'boxer',
+  'cocker-spaniel',
+  'dachshund',
+  'dalmatian',
+  'english-springer-spaniel',
+  'german-shepherd-dog',
+  'golden-retriever',
+  'irish-setter',
+  'keeshond',
+  'labrador-retriever',
+  'vizsla',
+]);
+
+export const BREED_LIST: BreedOption[] = [] = [
   { breedId: "affenpinscher", breedName: "Affenpinscher" },
   { breedId: "afghan-hound", breedName: "Afghan Hound" },
   { breedId: "airedale-terrier", breedName: "Airedale Terrier" },
@@ -261,14 +420,84 @@ export const BREED_LIST: BreedOption[] = [
   { breedId: "wirehaired-vizsla", breedName: "Wirehaired Vizsla" },
   { breedId: "xoloitzcuintli", breedName: "Xoloitzcuintli" },
   { breedId: "yakutian-laika", breedName: "Yakutian Laika" },
-  { breedId: "yorkshire-terrier", breedName: "Yorkshire Terrier" },
-];
+  { breedId: "yorkshire-terrier", breedName: "Yorkshire Terrier" },];
 
-/** Case-insensitive substring search, special values always first. */
-export function searchBreeds(query: string): BreedOption[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [...SPECIAL_BREEDS, ...BREED_LIST];
-  const matches = BREED_LIST.filter((b) => b.breedName.toLowerCase().includes(q));
-  const specials = SPECIAL_BREEDS.filter((b) => b.breedName.toLowerCase().includes(q));
-  return [...specials, ...matches];
+/* ------------------------------------------------------------------ */
+/* Search                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Accent- and case-folding.
+ *
+ * This matters more than it looks. Several names carry diacritics (Löwchen,
+ * Coton de Tuléar, Bracco Italiano). An owner typing "lowchen" on a phone
+ * keyboard must find Löwchen, and normalising to NFD then stripping combining
+ * marks is the cheap way to guarantee it.
+ */
+export function normalize(input: string): string {
+  return input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+const displayName = (b: BreedOption): string => b.pickerLabel ?? b.breedName;
+
+/**
+ * Case-insensitive, accent-insensitive, alias-aware search.
+ *
+ * Ranked prefix-first, then substring, then alias. Someone typing "col" wants
+ * Collie before Bearded Collie, and neither before Cocker Spaniel.
+ *
+ * Special values participate in the search but are NOT force-appended to every
+ * result set — that would put "Mixed breed" under every query. Keeping them
+ * reachable when a search matches nothing is the caller's job: see the empty
+ * state in app/breed-picker.tsx, which renders them inline.
+ */
+export function searchBreeds(query: string, list: BreedOption[] = BREED_LIST): BreedOption[] {
+  const q = normalize(query);
+  if (!q) return [...SPECIAL_BREEDS, ...list];
+
+  const prefix: BreedOption[] = [];
+  const substring: BreedOption[] = [];
+  const aliased: BreedOption[] = [];
+
+  for (const breed of [...SPECIAL_BREEDS, ...list]) {
+    const name = normalize(displayName(breed));
+    if (name.startsWith(q)) {
+      prefix.push(breed);
+      continue;
+    }
+    if (name.includes(q)) {
+      substring.push(breed);
+      continue;
+    }
+    const aliases = BREED_ALIASES[breed.breedId];
+    if (aliases?.some((a) => normalize(a).includes(q))) aliased.push(breed);
+  }
+
+  return [...prefix, ...substring, ...aliased];
+}
+
+/** Quick picks, resolved against the real list so a bad id cannot ship silently. */
+export function quickPicks(): BreedOption[] {
+  return QUICK_PICK_IDS.map((id) =>
+    BREED_LIST.find((b) => b.breedId === id),
+  ).filter((b): b is BreedOption => b !== undefined);
+}
+
+// A slug referenced by QUICK_PICK_IDS or EPILEPSY_PREDISPOSED that does not
+// exist in BREED_LIST is silent breakage — an empty quick-pick row, or
+// research metadata pointing at nothing. Fail loudly in development.
+if (__DEV__) {
+  const known = new Set(BREED_LIST.map((b) => b.breedId));
+  const missing = [...QUICK_PICK_IDS, ...EPILEPSY_PREDISPOSED].filter(
+    (id) => !known.has(id),
+  );
+  if (missing.length > 0) {
+    console.error(
+      `[breeds] ${missing.length} referenced breed id(s) are not in BREED_LIST: ${missing.join(', ')}`,
+    );
+  }
 }
