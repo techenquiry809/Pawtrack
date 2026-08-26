@@ -185,7 +185,7 @@ export const EPILEPSY_PREDISPOSED: ReadonlySet<string> = new Set([
   'vizsla',
 ]);
 
-export const BREED_LIST: BreedOption[] = [] = [
+export const BREED_LIST: BreedOption[] = [
   { breedId: "affenpinscher", breedName: "Affenpinscher" },
   { breedId: "afghan-hound", breedName: "Afghan Hound" },
   { breedId: "airedale-terrier", breedName: "Airedale Terrier" },

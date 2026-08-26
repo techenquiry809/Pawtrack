@@ -15,6 +15,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import { uid } from '@/db/client';
+import { toAbsoluteUri, toRelativePath } from './fileStore';
 
 export type CapturedVideo = {
   fileUri: string;
@@ -41,7 +42,15 @@ async function persist(tempUri: string): Promise<string> {
   const extension = tempUri.split('.').pop()?.split('?')[0] ?? 'mp4';
   const destination = new File(dir, `${uid()}.${extension}`);
   await new File(tempUri).copy(destination);
-  return destination.uri;
+  // RELATIVE, not destination.uri. An absolute path embeds the app container
+  // UUID, which iOS reassigns on reinstall — a seizure video an owner filmed
+  // for their vet would silently become unreachable after an update.
+  return toRelativePath(destination.uri);
+}
+
+/** Resolve a stored path for playback or sharing. */
+export function videoFileUri(relative: string): string {
+  return toAbsoluteUri(relative);
 }
 
 /**
@@ -114,9 +123,10 @@ export async function pickExistingVideo(): Promise<CapturedVideo | null> {
  * never let a failure here block the user — an orphaned file is a minor
  * annoyance, a crash mid-edit is not.
  */
-export function deleteVideoFile(fileUri: string): void {
+export function deleteVideoFile(relativePath: string): void {
+  if (!relativePath) return;
   try {
-    const file = new File(fileUri);
+    const file = new File(toAbsoluteUri(relativePath));
     if (file.exists) file.delete();
   } catch (e) {
     console.warn('[video] could not delete file', e);

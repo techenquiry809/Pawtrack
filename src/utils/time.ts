@@ -58,3 +58,18 @@ export function isSameLocalDay(a: number, b: number): boolean {
 }
 
 export const DAY_MS = 86_400_000;
+
+/**
+ * Local calendar day as 'YYYY-MM-DD' — the key the check-in unique index and
+ * the dose log are built on.
+ *
+ * Built from the LOCAL date parts, not from toISOString(), which converts to
+ * UTC and would file an 11pm check-in under tomorrow for anyone east of
+ * Greenwich. Matches SQLite's date(..., 'localtime') used in migration 4.
+ */
+export function localDayKey(epochMs = Date.now()): string {
+  const d = new Date(epochMs);
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}

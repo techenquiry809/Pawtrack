@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { AppState, StyleSheet, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -25,6 +25,7 @@ import { getDb } from '@/db/client';
 import { useAppStore } from '@/store/appStore';
 import { Body, Muted } from '@/components/ui';
 import { colors } from '@/theme/tokens';
+import { rescheduleIfTimezoneChanged } from '@/services/medicationReminders';
 
 export default function RootLayout() {
   const hydrate = useAppStore((s) => s.hydrate);
@@ -52,6 +53,28 @@ export default function RootLayout() {
       cancelled = true;
     };
   }, [hydrate]);
+
+  /**
+   * Medication reminders are scheduled at a LOCAL wall-clock time. When the
+   * owner travels, the device's offset moves and every scheduled notification
+   * has to be rebuilt or the 8am dose reminder starts arriving at 3am.
+   *
+   * Checked on foreground rather than on a timer, because a timezone only
+   * changes while the phone is in someone's pocket on a plane. It compares the
+   * offset first and does nothing when it has not moved, so an ordinary
+   * foreground costs one subtraction.
+   *
+   * Deliberately NOT in the startup gate above: this must never delay first
+   * paint, and it is a no-op until notification permission has been granted.
+   */
+  useEffect(() => {
+    if (!ready) return;
+    void rescheduleIfTimezoneChanged();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void rescheduleIfTimezoneChanged();
+    });
+    return () => sub.remove();
+  }, [ready]);
 
   if (error) {
     return (

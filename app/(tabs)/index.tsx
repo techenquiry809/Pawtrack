@@ -17,9 +17,11 @@ import {
   Body, Card, Disclaimer, Heading, Muted, Pill, SectionTitle, StatTile, Title,
 } from '@/components/ui';
 import { colors, fontSize, radius, shadow, spacing } from '@/theme/tokens';
+import { useChromeMetrics } from '@/theme/chrome';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 import { breedDisplay } from '@/db/dogRepo';
+import { DogAvatar } from '@/components/ProfileHeader';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import { formatDuration } from '@/utils/time';
@@ -30,6 +32,7 @@ const DAY_MS = 86_400_000;
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { contentClearance } = useChromeMetrics();
   const dog = useActiveDog();
   const settings = useAppStore((s) => s.settings);
   const startSeizure = useActiveSeizure((s) => s.start);
@@ -72,9 +75,18 @@ export default function HomeScreen() {
   const last = seizures[0];
   const week = seizures.filter((s) => now - s.start < 7 * DAY_MS);
   const month = seizures.filter((s) => now - s.start < 30 * DAY_MS);
+  // Only reliably timed records may feed a duration figure. Averaging in a
+  // record whose timing was never captured reports a guess as a measurement —
+  // src/features/analytics applies the same rule.
+  const timedThisMonth = month.filter(
+    (s) => s.durationConfidence !== 'unreliable' && s.durationSec > 0,
+  );
   const avgDuration =
-    month.length > 0
-      ? Math.round(month.reduce((sum, s) => sum + s.durationSec, 0) / month.length)
+    timedThisMonth.length > 0
+      ? Math.round(
+          timedThisMonth.reduce((sum, s) => sum + s.durationSec, 0) /
+            timedThisMonth.length,
+        )
       : null;
   const daysSince = last ? Math.floor((now - last.start) / DAY_MS) : null;
 
@@ -91,12 +103,30 @@ export default function HomeScreen() {
       style={styles.screen}
       contentContainerStyle={[
         styles.content,
-        { paddingTop: insets.top + spacing.md },
+        { paddingTop: insets.top + spacing.md, paddingBottom: contentClearance },
       ]}
       keyboardShouldPersistTaps="handled"
     >
-      <Muted style={styles.eyebrow}>PAWS JOURNAL</Muted>
-      <Title>Today</Title>
+      {/* Greeting row. The avatar sits INLINE with the existing title rather
+          than in a card above it, so the profile entry point costs zero
+          vertical space — the red Record seizure button must stay reachable
+          without scrolling, which is the whole point of this screen. */}
+      <View style={styles.greetRow}>
+        <View style={styles.flex}>
+          <Muted style={styles.eyebrow}>PAWS JOURNAL</Muted>
+          <Title>Today</Title>
+        </View>
+        <Pressable
+          onPress={() => router.push('/dog-profile')}
+          accessibilityRole="button"
+          accessibilityLabel={`${dog.name}'s profile`}
+          accessibilityHint="Opens the dog profile, where you can add a photo and details"
+          hitSlop={8}
+          style={({ pressed }) => pressed && { opacity: 0.7 }}
+        >
+          <DogAvatar photoUri={dog.photoUri} size={48} />
+        </Pressable>
+      </View>
 
       {/* --- Primary action ------------------------------------------- */}
       <Pressable
@@ -165,7 +195,18 @@ export default function HomeScreen() {
                   minute: '2-digit',
                 })}
               </Body>
-              <Pill label={formatDuration(last.durationSec)} tone="teal" />
+              <Pill
+                label={
+                  last.durationConfidence === 'unreliable' || last.durationSec === 0
+                    ? 'Not timed'
+                    : formatDuration(last.durationSec)
+                }
+                tone={
+                  last.durationConfidence === 'unreliable' || last.durationSec === 0
+                    ? 'neutral'
+                    : 'teal'
+                }
+              />
             </View>
             <Muted style={{ marginTop: 6 }} numberOfLines={2}>
               {last.ictalObs.slice(0, 3).join(', ') || 'No observations logged'}
@@ -220,8 +261,10 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  // The island floats over the content, so the last row needs to clear it.
+  content: { paddingHorizontal: spacing.lg },
   eyebrow: { letterSpacing: 1.4, fontWeight: '700', fontSize: fontSize.xs },
+  greetRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   flex: { flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   semibold: { fontWeight: '600' },

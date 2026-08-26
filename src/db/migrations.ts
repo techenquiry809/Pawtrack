@@ -207,6 +207,167 @@ const migrations: Migration[] = [
       `);
     },
   },
+
+  {
+    version: 4,
+    name: 'check-in day key, medication reminders and dose log',
+    up: async (db) => {
+      /* ---------------- One check-in per dog per local day -------------
+       * The old table keyed on `timestamp` and duplicates were prevented in
+       * app code — a SELECT-then-UPDATE that two rapid saves can race past.
+       * This moves the guarantee into the database.
+       *
+       * `check_in_date` is the LOCAL calendar day as 'YYYY-MM-DD'. Local, not
+       * UTC: a check-in at 11pm belongs to the day the owner thinks it does.
+       */
+      await db.execAsync(`
+        ALTER TABLE daily_checkins ADD COLUMN check_in_date TEXT NOT NULL DEFAULT '';
+      `);
+
+      // Backfill from the existing epoch column. SQLite's 'localtime' modifier
+      // applies the device's current offset — right for every row an owner
+      // actually recorded on the device they are holding.
+      await db.execAsync(`
+        UPDATE daily_checkins
+           SET check_in_date = date(timestamp / 1000, 'unixepoch', 'localtime')
+         WHERE check_in_date = '';
+      `);
+
+      // A unique index fails outright if duplicates already exist, so collapse
+      // them first. Keep the most recently updated row for each day and drop
+      // the rest — the newest edit is the one the owner last confirmed.
+      await db.execAsync(`
+        DELETE FROM daily_checkins
+         WHERE id NOT IN (
+           SELECT id FROM (
+             SELECT id,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY dog_id, check_in_date
+                      ORDER BY updated_at DESC, created_at DESC, rowid DESC
+                    ) AS rn
+               FROM daily_checkins
+           ) WHERE rn = 1
+         );
+      `);
+
+      await db.execAsync(`
+        CREATE UNIQUE INDEX idx_checkins_dog_date
+          ON daily_checkins (dog_id, check_in_date);
+      `);
+
+      /* ---------------- Medication reminders ---------------------------
+       * Their own table, not a column on `medications`. Dogs on
+       * anticonvulsants are routinely dosed two or three times a day, so a
+       * single nullable time column would need rebuilding immediately.
+       *
+       * NOTE: medications.scheduled_time and medications.notification_id are
+       * now dead. They are deliberately left in place — a dead column costs
+       * nothing, and DROP COLUMN on a shipped table is a real risk.
+       */
+      await db.execAsync(`
+        CREATE TABLE medication_reminders (
+          id              TEXT PRIMARY KEY NOT NULL,
+          medication_id   TEXT NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+          -- Local wall-clock 'HH:MM', 24h. Stored as clock time, never as an
+          -- instant, so 8am stays 8am after the owner changes timezone.
+          time_hhmm       TEXT NOT NULL,
+          enabled         INTEGER NOT NULL DEFAULT 1,
+          -- Handle returned by expo-notifications, so we can cancel precisely.
+          notification_id TEXT,
+          created_at      INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL
+        );
+        CREATE INDEX idx_reminders_med ON medication_reminders(medication_id);
+        -- The same time twice on one medication is always a mistake.
+        CREATE UNIQUE INDEX idx_reminders_med_time
+          ON medication_reminders (medication_id, time_hhmm);
+      `);
+
+      /* ---------------- Dose log ---------------------------------------
+       * Records what actually happened, which is a different question from
+       * what was prescribed. Feeds the check-in's "medication given on time?"
+       * and the vet report.
+       */
+      await db.execAsync(`
+        CREATE TABLE medication_doses (
+          id             TEXT PRIMARY KEY NOT NULL,
+          medication_id  TEXT NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+          dog_id         TEXT NOT NULL REFERENCES dogs(id) ON DELETE CASCADE,
+          -- The local day this dose belonged to, so a late-night dose is not
+          -- filed under tomorrow.
+          dose_date      TEXT NOT NULL,
+          -- The reminder time it corresponds to, or '' for an ad-hoc record.
+          scheduled_hhmm TEXT NOT NULL DEFAULT '',
+          -- 'given' | 'late' | 'missed'. Owner-reported, never inferred.
+          status         TEXT NOT NULL,
+          recorded_at    INTEGER NOT NULL,
+          note           TEXT NOT NULL DEFAULT '',
+          created_at     INTEGER NOT NULL
+        );
+        CREATE INDEX idx_doses_dog_date ON medication_doses(dog_id, dose_date DESC);
+        -- One record per medication, per day, per scheduled time.
+        CREATE UNIQUE INDEX idx_doses_unique
+          ON medication_doses (medication_id, dose_date, scheduled_hhmm);
+      `);
+    },
+  },
+
+  {
+    version: 5,
+    name: 'dog photo',
+    up: async (db) => {
+      // Path inside the app's document directory, same rule as seizure videos:
+      // the bytes live on disk, only the path goes in the database. An empty
+      // string means no photo, which keeps the column NOT NULL and avoids a
+      // three-state null/empty/set muddle in every consumer.
+      await db.execAsync(`
+        ALTER TABLE dogs ADD COLUMN photo_uri TEXT NOT NULL DEFAULT '';
+      `);
+    },
+  },
+
+  {
+    version: 6,
+    name: 'backfilled check-ins',
+    up: async (db) => {
+      // A check-in filled in days later, from memory, is not the same evidence
+      // as one recorded that evening — and check-ins are the CONTROL DATASET
+      // the pattern analysis measures seizure days against. Seizures already
+      // carry `retrospective` for exactly this reason; this is its counterpart.
+      //
+      // Existing rows default to 0: every check-in written before this column
+      // existed came from the same-day form, which is true.
+      await db.execAsync(`
+        ALTER TABLE daily_checkins ADD COLUMN backfilled INTEGER NOT NULL DEFAULT 0;
+      `);
+    },
+  },
+
+  {
+    version: 7,
+    name: 'store file paths relative to the document directory',
+    up: async (db) => {
+      /**
+       * Absolute paths embed the app container UUID, which iOS reassigns on
+       * reinstall. Every stored photo and video reference written before this
+       * migration points at a container that may no longer exist.
+       *
+       * Rewrite them to the portion after '/Documents/', which is stable.
+       * '/Documents/' is 11 characters, so instr(...) + 11 lands on the first
+       * character after it. Rows that never contained the marker are left
+       * alone rather than mangled.
+       */
+      await db.execAsync(`
+        UPDATE dogs
+           SET photo_uri = substr(photo_uri, instr(photo_uri, '/Documents/') + 11)
+         WHERE photo_uri <> '' AND instr(photo_uri, '/Documents/') > 0;
+
+        UPDATE videos
+           SET file_uri = substr(file_uri, instr(file_uri, '/Documents/') + 11)
+         WHERE file_uri <> '' AND instr(file_uri, '/Documents/') > 0;
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {

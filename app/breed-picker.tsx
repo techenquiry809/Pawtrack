@@ -1,3 +1,4 @@
+
 /**
  * Standardized breed selection.
  *
@@ -37,11 +38,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Heading, Muted, Title } from '@/components/ui';
 import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { goBackOrHome } from '@/utils/nav';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as dogRepo from '@/db/dogRepo';
 import {
@@ -65,6 +67,11 @@ export default function BreedPickerScreen() {
   const dog = useActiveDog();
   const refreshDogs = useAppStore((s) => s.refreshDogs);
 
+  // Onboarding opens this BEFORE a dog row exists, so there is nothing to
+  // update — the choice is handed back through the route instead.
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
+  const isOnboarding = returnTo === 'onboarding';
+
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<BreedOption | null>(null);
   const [description, setDescription] = useState('');
@@ -79,7 +86,8 @@ export default function BreedPickerScreen() {
   );
   const picks = useMemo(() => quickPicks(), []);
 
-  if (!dog) return null;
+  // During onboarding there is no dog yet; every other entry point requires one.
+  if (!dog && !isOnboarding) return null;
 
   // Only these two kinds pair with the owner's own words. For a standard breed
   // the canonical name IS the answer, and a free-text box would invite exactly
@@ -88,6 +96,23 @@ export default function BreedPickerScreen() {
 
   const onSave = async () => {
     if (!selected) return;
+
+    if (isOnboarding) {
+      // Hand the structured choice back. The description travels separately so
+      // the two never merge into one free-text field.
+      router.replace({
+        pathname: '/onboarding',
+        params: {
+          breedId: selected.breedId,
+          breedDesc: needsDescription
+            ? description.trim().slice(0, DESCRIPTION_LIMIT)
+            : '',
+        },
+      });
+      return;
+    }
+
+    if (!dog) return;
     setSaving(true);
     setError(null);
     try {
@@ -103,7 +128,7 @@ export default function BreedPickerScreen() {
         },
       });
       await refreshDogs();
-      router.back();
+      goBackOrHome(router);
     } catch (e) {
       console.error('[breed-picker] save failed', e);
       setError('Could not save the breed. Please try again.');
@@ -142,8 +167,8 @@ export default function BreedPickerScreen() {
       <View style={styles.header}>
         <Title>Choose breed</Title>
         <Muted style={styles.intro}>
-          Picking from the list keeps {dog.name}&apos;s records groupable. If you
-          are not sure, say so — it is a real answer, not a gap.
+          Picking from the list keeps {dog ? `${dog.name}'s` : 'your'} records
+          groupable. If you are not sure, say so — it is a real answer, not a gap.
         </Muted>
       </View>
 

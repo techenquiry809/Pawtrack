@@ -24,6 +24,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { colors, fontSize, radius, shadow, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { Icon, type IconName } from '@/components/Icon';
 
 /* ------------------------------------------------------------------ */
 /* Text                                                                */
@@ -225,8 +226,165 @@ export const Disclaimer = ({ children }: { children: ReactNode }) => (
 );
 
 /* ------------------------------------------------------------------ */
+/* SegmentedControl — the filter row                                   */
+/* ------------------------------------------------------------------ */
+
+export function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  accessibilityLabel,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (next: T) => void;
+  accessibilityLabel?: string;
+}) {
+  return (
+    <View style={styles.segment} accessibilityRole="tablist" accessibilityLabel={accessibilityLabel}>
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={option.label}
+            style={({ pressed }) => [
+              styles.segmentItem,
+              active && styles.segmentItemOn,
+              pressed && styles.btnPressed,
+            ]}
+          >
+            <Text style={[styles.segmentLabel, active && styles.segmentLabelOn]}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* NavRow — a settings/navigation row                                  */
+/* ------------------------------------------------------------------ */
+
+export function NavRow({
+  label,
+  detail,
+  icon,
+  onPress,
+  last = false,
+}: {
+  label: string;
+  detail?: string;
+  icon?: IconName;
+  onPress: () => void;
+  last?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={detail}
+      style={({ pressed }) => [
+        styles.navRow,
+        !last && styles.navRowDivider,
+        pressed && styles.navRowPressed,
+      ]}
+    >
+      {icon ? (
+        <View style={styles.navGlyph}>
+          <Icon name={icon} size="lg" color={colors.tealDeep} />
+        </View>
+      ) : null}
+      <View style={styles.flexOne}>
+        <Text style={styles.navLabel}>{label}</Text>
+        {detail ? <Text style={styles.navDetail}>{detail}</Text> : null}
+      </View>
+      <Icon name="chevron" size="md" color={colors.inkSoft} />
+    </Pressable>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* EmptyState                                                          */
+/* ------------------------------------------------------------------ */
+
+export function EmptyState({
+  icon = 'empty',
+  title,
+  body,
+}: {
+  icon?: IconName;
+  title: string;
+  body: string;
+}) {
+  return (
+    <View style={styles.empty} accessible accessibilityLabel={`${title}. ${body}`}>
+      <View style={styles.emptyGlyph}>
+        <Icon name={icon} size="xl" color={colors.inkSoft} />
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyBody}>{body}</Text>
+    </View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 
 const styles = StyleSheet.create({
+  flexOne: { flex: 1 },
+
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: colors.line,
+    borderRadius: radius.pill,
+    padding: 3,
+    gap: 3,
+  },
+  segmentItem: {
+    flex: 1,
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+  },
+  segmentItemOn: { backgroundColor: colors.card },
+  segmentLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.inkSoft,
+  },
+  segmentLabelOn: { color: colors.ink, fontWeight: '700' },
+
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 56,
+    paddingHorizontal: spacing.md,
+  },
+  navRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.line },
+  navRowPressed: { backgroundColor: colors.bg },
+  navGlyph: { width: 24, alignItems: 'center' },
+  navLabel: { fontSize: fontSize.md, color: colors.ink, fontWeight: '600' },
+  navDetail: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1 },
+
+  empty: { alignItems: 'center', paddingVertical: spacing.xl, gap: 6 },
+  emptyGlyph: { marginBottom: 4 },
+  emptyTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink },
+  emptyBody: {
+    fontSize: fontSize.base,
+    color: colors.inkSoft,
+    textAlign: 'center',
+    lineHeight: 21,
+    maxWidth: 300,
+  },
+
   title: {
     fontSize: fontSize.display,
     fontWeight: '700',

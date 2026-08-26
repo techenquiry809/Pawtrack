@@ -344,6 +344,35 @@ export function stressAssociation(
 }
 
 /* ------------------------------------------------------------------ */
+/* Trend series                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Seizure counts per calendar month, oldest first, for the trend sparkline.
+ *
+ * Months with no seizures are included as zeros. Omitting them would compress
+ * a quiet spell out of the picture and make an improving trend look flat.
+ */
+export function monthlyCounts(
+  seizures: Seizure[],
+  months: number,
+  now: number,
+): number[] {
+  const buckets = new Array<number>(months).fill(0);
+  const ref = new Date(now);
+
+  for (const s of seizures) {
+    const d = new Date(s.start);
+    const monthsAgo =
+      (ref.getFullYear() - d.getFullYear()) * 12 + (ref.getMonth() - d.getMonth());
+    if (monthsAgo < 0 || monthsAgo >= months) continue;
+    const index = months - 1 - monthsAgo;
+    buckets[index] = (buckets[index] ?? 0) + 1;
+  }
+  return buckets;
+}
+
+/* ------------------------------------------------------------------ */
 /* Top-level                                                           */
 /* ------------------------------------------------------------------ */
 

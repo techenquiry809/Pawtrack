@@ -135,19 +135,72 @@ export type EmergencyPlan = z.infer<typeof EmergencyPlanSchema>;
 export const MedicationSchema = z.object({
   id: z.string(),
   dogId: z.string(),
-  name: z.string().min(1),
-  dose: z.string(),
-  unit: z.string(),
-  frequency: z.string(),
-  /** 'HH:MM' 24h local time, or empty string for no reminder. */
-  scheduledTime: z.string(),
-  prescriber: z.string(),
-  /** Set when a repeating local notification is registered for this med. */
-  notificationId: z.string().nullable(),
+  name: z.string().min(1).max(120),
+  /** What the vet prescribed, as the owner typed it. Never suggested by us. */
+  dose: z.string().max(60),
+  unit: z.string().max(30),
+  frequency: z.string().max(60),
+  prescriber: z.string().max(120),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
 export type Medication = z.infer<typeof MedicationSchema>;
+
+/**
+ * A reminder time, in its own table rather than a column on the medication.
+ *
+ * Dogs on anticonvulsants are routinely dosed two or three times a day, so a
+ * single nullable time column would have needed rebuilding immediately.
+ *
+ * `timeHHMM` is LOCAL WALL-CLOCK time, never an instant. An owner who flies to
+ * another timezone still needs their 8am reminder at 8am.
+ */
+export const REMINDER_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const MedicationReminderSchema = z.object({
+  id: z.string(),
+  medicationId: z.string(),
+  timeHHMM: z.string().regex(REMINDER_TIME_RE, 'Use a 24-hour time like 08:00'),
+  enabled: z.boolean(),
+  /** Handle from expo-notifications, so we can cancel exactly this one. */
+  notificationId: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type MedicationReminder = z.infer<typeof MedicationReminderSchema>;
+
+export type MedicationWithReminders = Medication & {
+  reminders: MedicationReminder[];
+};
+
+/**
+ * What actually happened, which is a different question from what was
+ * prescribed. Always owner-reported — the app never infers a status, because
+ * "you did not open the app" is not evidence a dose was missed.
+ */
+export const DOSE_STATUSES = ['given', 'late', 'missed'] as const;
+export type DoseStatus = (typeof DOSE_STATUSES)[number];
+
+export const DOSE_STATUS_LABEL: Record<DoseStatus, string> = {
+  given: 'Given on time',
+  late: 'Given late',
+  missed: 'Not given',
+};
+
+export const MedicationDoseSchema = z.object({
+  id: z.string(),
+  medicationId: z.string(),
+  dogId: z.string(),
+  /** Local calendar day, 'YYYY-MM-DD'. */
+  doseDate: z.string(),
+  /** The reminder slot this belongs to, or '' for an ad-hoc record. */
+  scheduledHHMM: z.string(),
+  status: z.enum(DOSE_STATUSES),
+  recordedAt: z.number(),
+  note: z.string().max(500),
+  createdAt: z.number(),
+});
+export type MedicationDose = z.infer<typeof MedicationDoseSchema>;
 
 /* ------------------------------------------------------------------ */
 /* Dog                                                                 */
@@ -158,6 +211,8 @@ export type DiagnosisStatus = (typeof DIAGNOSIS_STATUSES)[number];
 export const DogSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
+  /** Path in the document directory, or '' for none. Bytes never go in the DB. */
+  photoUri: z.string(),
   breed: BreedSchema,
   sex: z.enum(['', 'male', 'female']),
   ageYears: z.number().nullable(),
@@ -331,6 +386,19 @@ export const DailyCheckinSchema = z.object({
   id: z.string(),
   dogId: z.string(),
   timestamp: z.number(),
+  /**
+   * Local calendar day, 'YYYY-MM-DD'. This is the real key — a unique index on
+   * (dog_id, check_in_date) is what guarantees one check-in per day, rather
+   * than app code remembering to look first.
+   */
+  checkInDate: z.string(),
+  /**
+   * True when filled in after the day it describes. Recalled from memory is
+   * weaker evidence than recorded that evening, and this is the control
+   * dataset the pattern analysis compares seizure days against — so the
+   * distinction is stored rather than lost.
+   */
+  backfilled: z.boolean(),
   sleepHrs: z.number().nullable(),
   appetite: z.enum(['normal', 'increased', 'decreased']),
   water: z.enum(['normal', 'increased', 'decreased']),

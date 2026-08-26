@@ -50,6 +50,44 @@ export const fromSqlBool = (value: number | null): boolean => value === 1;
 
 export const toSqlJson = (value: unknown): string => JSON.stringify(value ?? null);
 
+/**
+ * Reads a stored JSON OBJECT and guarantees every key is present.
+ *
+ * ── WHY THIS EXISTS ───────────────────────────────────────────────────
+ *
+ * `fromSqlJson` returns whatever parsed. `'{}'` is perfectly valid JSON, so it
+ * comes back as `{}` and every field on it is `undefined` — which is how
+ * `dog.emergencyVet.phone.trim()` threw "Cannot read property 'trim' of
+ * undefined" on the More screen.
+ *
+ * That is not an exotic case: `'{}'` is the COLUMN DEFAULT for vet_json,
+ * emergency_vet_json, emergency_plan_json and context_json, so any row written
+ * without those columns — a migration, a restore, a partial import — produces
+ * an object that looks fine to TypeScript and explodes at the first property
+ * read.
+ *
+ * Merging onto a complete default makes a partial object impossible.
+ */
+export function fromSqlObject<T extends object>(
+  value: string | null,
+  defaults: T,
+): T {
+  const raw = fromSqlJson<Partial<T> | null>(value, null);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...defaults };
+  return { ...defaults, ...raw };
+}
+
+/**
+ * Reads a stored JSON ARRAY, falling back when the value is not one.
+ *
+ * Same failure mode as above in reverse: a column holding `'{}'` typed as
+ * `string[]` survives compilation and throws on the first `.slice()`.
+ */
+export function fromSqlArray<T>(value: string | null): T[] {
+  const raw = fromSqlJson<unknown>(value, null);
+  return Array.isArray(raw) ? (raw as T[]) : [];
+}
+
 export function fromSqlJson<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
   try {

@@ -7,7 +7,7 @@
  * them would add joins for no benefit.
  */
 
-import { getDb, uid, toSqlJson, fromSqlJson } from './client';
+import { getDb, uid, toSqlJson, fromSqlObject } from './client';
 import type {
   Breed,
   Dog,
@@ -23,6 +23,7 @@ const EMPTY_PLAN: EmergencyPlan = {
 type DogRow = {
   id: string;
   name: string;
+  photo_uri: string;
   breed_id: string | null;
   breed_name: string;
   breed_source: string;
@@ -47,6 +48,7 @@ function rowToDog(row: DogRow): Dog {
   return {
     id: row.id,
     name: row.name,
+    photoUri: row.photo_uri,
     breed: {
       breedId: row.breed_id,
       breedName: row.breed_name,
@@ -62,9 +64,9 @@ function rowToDog(row: DogRow): Dog {
     seizureType: row.seizure_type,
     allergies: row.allergies,
     diet: row.diet,
-    vet: fromSqlJson<VetContact>(row.vet_json, EMPTY_CONTACT),
-    emergencyVet: fromSqlJson<VetContact>(row.emergency_vet_json, EMPTY_CONTACT),
-    emergencyPlan: fromSqlJson<EmergencyPlan>(row.emergency_plan_json, EMPTY_PLAN),
+    vet: fromSqlObject<VetContact>(row.vet_json, EMPTY_CONTACT),
+    emergencyVet: fromSqlObject<VetContact>(row.emergency_vet_json, EMPTY_CONTACT),
+    emergencyPlan: fromSqlObject<EmergencyPlan>(row.emergency_plan_json, EMPTY_PLAN),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -131,6 +133,7 @@ export async function updateDog(
   };
 
   if (patch.name !== undefined) push('name', patch.name);
+  if (patch.photoUri !== undefined) push('photo_uri', patch.photoUri);
   if (patch.breed !== undefined) {
     push('breed_id', patch.breed.breedId);
     push('breed_name', patch.breed.breedName);

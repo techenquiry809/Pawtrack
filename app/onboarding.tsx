@@ -1,16 +1,27 @@
 import { useState } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Body, Button, Card, Disclaimer, Heading, Muted, Title } from '@/components/ui';
 import { colors, fontSize, radius, spacing } from '@/theme/tokens';
+import { Icon } from '@/components/Icon';
 import * as dogRepo from '@/db/dogRepo';
 import { useAppStore } from '@/store/appStore';
+import { BREED_LIST, BREED_SOURCE, SPECIAL_BREEDS, type BreedOption } from '@/constants/breeds';
 
 /**
- * First-run onboarding. Deliberately minimal: name only (plus optional age).
- * Everything else — breed, vet numbers, emergency plan — is added later from
- * Home, because a new user in distress should reach a working timer fast.
+ * First-run onboarding.
+ *
+ * Name is the only required field. Breed sits here now rather than after
+ * creation, but is OPTIONAL and never blocks the profile — a new owner in
+ * distress must reach a working timer fast, and pedigree can wait.
+ *
+ * Breed is chosen from the bundled standardized list through the full-screen
+ * picker. There is deliberately NO free-text breed field: free text produces
+ * "Golden Retreiver", "golden retriver" and "Golder Retriever" as three
+ * different dogs and makes the records ungroupable. The only free text is the
+ * optional description that pairs with Mixed Breed or Other, stored in a
+ * separate column.
  */
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -22,6 +33,14 @@ export default function OnboardingScreen() {
   const [age, setAge] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The picker hands its choice back through the route, so this screen never
+  // needs to hold a copy of the breed list.
+  const params = useLocalSearchParams<{ breedId?: string; breedDesc?: string }>();
+  const chosenBreed: BreedOption | undefined = params.breedId
+    ? [...SPECIAL_BREEDS, ...BREED_LIST].find((b) => b.breedId === params.breedId)
+    : undefined;
+  const breedDesc = (params.breedDesc ?? '').slice(0, 200);
 
   const onSubmit = async () => {
     const trimmed = name.trim();
@@ -36,6 +55,18 @@ export default function OnboardingScreen() {
       const id = await dogRepo.createDog({
         name: trimmed,
         ageYears: Number.isFinite(parsedAge) ? parsedAge : null,
+        breed: chosenBreed
+          ? {
+              breedId: chosenBreed.breedId,
+              // The canonical stored name, never the friendlier picker label.
+              breedName: chosenBreed.breedName,
+              breedSource: BREED_SOURCE,
+              userEnteredDescription:
+                chosenBreed.kind === 'mixed' || chosenBreed.kind === 'other'
+                  ? breedDesc
+                  : '',
+            }
+          : undefined,
       });
       await refreshDogs();
       await setActiveDog(id);
@@ -92,14 +123,44 @@ export default function OnboardingScreen() {
           accessibilityLabel="Approximate age in years, optional"
         />
 
-        <Muted style={{ marginBottom: spacing.md }}>
-          You can choose a breed from the standardized list right after creating
-          the profile.
+        <Muted style={styles.label}>BREED (OPTIONAL)</Muted>
+        <Pressable
+          onPress={() =>
+            router.push('/breed-picker?returnTo=onboarding')
+          }
+          accessibilityRole="button"
+          accessibilityLabel="Choose Breed"
+          accessibilityHint="Opens a searchable list of standardized breeds"
+          style={({ pressed }) => [styles.breedBtn, pressed && styles.pressed]}
+        >
+          <View style={styles.flexOne}>
+            <Text style={styles.breedValue}>
+              {chosenBreed
+                ? chosenBreed.pickerLabel ?? chosenBreed.breedName
+                : 'Choose Breed'}
+            </Text>
+            {chosenBreed && breedDesc.length > 0 && (
+              <Text style={styles.breedDesc} numberOfLines={1}>
+                {breedDesc}
+              </Text>
+            )}
+          </View>
+          <Icon name="chevron" size="md" color={colors.inkSoft} />
+        </Pressable>
+        <Muted style={{ marginTop: 6, marginBottom: spacing.md }}>
+          You can skip this and set it later from the dog profile.
         </Muted>
 
         {error ? <Body style={styles.error}>{error}</Body> : null}
 
-        <Button label="Create profile" large loading={saving} onPress={onSubmit} />
+        <Button
+          label="Create profile"
+          large
+          loading={saving}
+          // Disabled until there is a name — the one genuinely required field.
+          disabled={name.trim().length === 0}
+          onPress={onSubmit}
+        />
       </Card>
     </ScrollView>
   );
@@ -124,4 +185,18 @@ const styles = StyleSheet.create({
     color: colors.ink, backgroundColor: colors.card,
   },
   error: { color: colors.redDeep, marginBottom: spacing.sm },
+  flexOne: { flex: 1 },
+  pressed: { opacity: 0.7 },
+  breedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    minHeight: 48,
+    backgroundColor: colors.card,
+  },
+  breedValue: { fontSize: fontSize.md, color: colors.ink, fontWeight: '600' },
+  breedDesc: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1 },
 });

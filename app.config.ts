@@ -62,14 +62,19 @@ const config: ExpoConfig = {
     // camera launch, not expo-camera. VIBRATE serves expo-haptics on the live
     // seizure screen.
     //
-    // POST_NOTIFICATIONS and SCHEDULE_EXACT_ALARM were removed: nothing
-    // schedules a notification yet, and SCHEDULE_EXACT_ALARM is a
-    // policy-restricted permission that requires a Play Console declaration
-    // form. Add them back in the same PR as the medication reminders.
+    // POST_NOTIFICATIONS is back because medication reminders now exist and
+    // schedule notifications — native config lands with the feature that needs
+    // it, never ahead of it.
+    //
+    // SCHEDULE_EXACT_ALARM stays OUT. A daily medication reminder does not need
+    // to fire to the second, and it is a policy-restricted permission that
+    // requires a Play Console declaration form. An inexact daily alarm is the
+    // right trade.
     permissions: [
       'CAMERA',
       'RECORD_AUDIO',
       'READ_MEDIA_VIDEO',
+      'POST_NOTIFICATIONS',
       'VIBRATE',
     ],
   },
@@ -83,15 +88,26 @@ const config: ExpoConfig = {
    * other direction.
    *
    * Removed until they have real importers:
-   *   expo-camera        — no imports; video capture goes through
-   *                        expo-image-picker's system camera by design
-   *   expo-notifications — nothing schedules a notification yet
+   *   expo-camera — no imports; video capture goes through expo-image-picker's
+   *                 system camera by design
+   *
+   * expo-notifications EARNED ITS ENTRY BACK in the medication-reminder change:
+   * src/services/medicationReminders.ts schedules repeating daily reminders.
    *
    * expo-print and expo-sharing are installed but were never plugin-configured,
    * so there is nothing to remove; they earn entries when the vet report ships.
    */
   plugins: [
     'expo-router',
+    [
+      'expo-notifications',
+      {
+        // Local notifications only — medication reminders. There is no push
+        // server; nothing about the dog leaves the device.
+        icon: './assets/icon.png',
+        color: '#2F7E86',
+      },
+    ],
     [
       'expo-image-picker',
       {

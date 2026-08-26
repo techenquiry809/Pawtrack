@@ -23,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Card, Disclaimer, Heading, Muted, Title } from '@/components/ui';
 import { colors, fontSize, radius, spacing } from '@/theme/tokens';
+import { goBackOrHome } from '@/utils/nav';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as dogRepo from '@/db/dogRepo';
 import type { EmergencyPlan, VetContact } from '@/types/domain';
@@ -60,7 +61,7 @@ export default function EmergencyPlanScreen() {
     try {
       await dogRepo.updateDog(dog.id, { vet, emergencyVet, emergencyPlan: plan });
       await refreshDogs();
-      router.back();
+      goBackOrHome(router);
     } catch (e) {
       console.error('[emergency-plan] save failed', e);
       setError('Could not save. Please try again.');
