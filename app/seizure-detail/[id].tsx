@@ -28,7 +28,7 @@ import {
 import { colors, fontSize, spacing } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
 import * as seizureRepo from '@/db/seizureRepo';
-import { deleteVideoFile } from '@/services/videoService';
+import { deleteVideoAssets } from '@/services/videoService';
 import { formatDuration } from '@/utils/time';
 import type { DurationConfidence, SeizureWithVideos } from '@/types/domain';
 
@@ -62,6 +62,24 @@ const CONFIDENCE_COPY: Record<DurationConfidence, { label: string; tone: PillTon
     tone: 'neutral',
     blurb: 'Recorded before the app tracked timing provenance.',
   },
+};
+
+/**
+ * 'unreliable' covers two different situations, and they must not read alike.
+ *
+ * The app could not derive a duration at all  →  CONFIDENCE_COPY.unreliable
+ * The OWNER stated one from memory            →  this
+ *
+ * An imported record is written 'unreliable' deliberately — only the in-app
+ * stopwatch earns 'high' — so without this branch an owner who typed "2 min
+ * 10 seconds" was shown "Not timed / No dependable duration was captured",
+ * which throws away a number they had just been asked for.
+ */
+const OWNER_STATED_COPY = {
+  label: 'Your estimate',
+  tone: 'amber' as PillTone,
+  blurb:
+    'The app did not time this seizure. This length is the one you entered from memory, so it is recorded as your estimate rather than a measurement.',
 };
 
 export default function SeizureDetailScreen() {
@@ -114,7 +132,12 @@ export default function SeizureDetailScreen() {
               try {
                 // Files first: once the row is gone the paths are unreachable
                 // and the videos would sit on the phone forever.
-                for (const video of record.videos) deleteVideoFile(video.fileUri);
+                //
+                // deleteVideoAssets, not deleteVideoFile: the latter takes the
+                // clip alone and left every poster frame behind, and a thumbnail
+                // whose video and whose row are both gone is unreachable from
+                // every screen in the app.
+                for (const video of record.videos) deleteVideoAssets(video);
                 await seizureRepo.deleteSeizure(record.id);
                 goBackOrHome(router);
               } catch (e) {
@@ -148,7 +171,12 @@ export default function SeizureDetailScreen() {
     );
   }
 
-  const confidence = CONFIDENCE_COPY[record.durationConfidence];
+  // A duration exists or it does not; how much to trust it is a separate axis.
+  const hasDuration = record.durationSec !== null && record.durationSec !== 0;
+  const confidence =
+    record.durationConfidence === 'unreliable' && hasDuration
+      ? OWNER_STATED_COPY
+      : CONFIDENCE_COPY[record.durationConfidence];
   const started = new Date(record.start);
 
   return (
@@ -175,9 +203,7 @@ export default function SeizureDetailScreen() {
           <Pill label={confidence.label} tone={confidence.tone} />
         </View>
         <Text style={styles.duration}>
-          {record.durationConfidence === 'unreliable' || record.durationSec === 0
-            ? '—'
-            : formatDuration(record.durationSec)}
+          {hasDuration ? formatDuration(record.durationSec) : '—'}
         </Text>
         <Muted>{confidence.blurb}</Muted>
 

@@ -44,6 +44,26 @@ export type StartMark = {
   startedAtMono: number | null;
 };
 
+/**
+ * The instant the seizure STOPPED, captured by endSeizure().
+ *
+ * This exists because the seizure ends when the owner taps "stop timer", not
+ * when the record is finally written. Between those two moments the owner walks
+ * through the post-seizure questionnaire and the recovery screen, which on a
+ * real seizure is several minutes. Measuring to save-time folded all of that
+ * into the duration and stamped it 'high'.
+ *
+ * `endedAtMono` is memory-only for exactly the reason `startedAtMono` is: its
+ * origin is session-specific, so it is meaningless after a relaunch. When it is
+ * absent we fall back to the wall clock and say so, rather than guessing.
+ */
+export type EndMark = {
+  /** Absolute instant, epoch ms. Persisted as seizures.end. */
+  endedAtUtc: number;
+  /** Monotonic reading. Memory only — never write this to SQLite. */
+  endedAtMono: number | null;
+};
+
 export type ResolvedDuration = {
   durationSeconds: number | null;
   confidence: DurationConfidence;
@@ -52,6 +72,11 @@ export type ResolvedDuration = {
 function monotonicNow(): number | null {
   const perf = globalThis.performance;
   return typeof perf?.now === 'function' ? perf.now() : null;
+}
+
+/** Call once, at the instant the owner says the seizure has stopped. */
+export function markEnd(now = Date.now()): EndMark {
+  return { endedAtUtc: now, endedAtMono: monotonicNow() };
 }
 
 /** Call once, at the instant the owner says the seizure is starting. */
@@ -65,14 +90,28 @@ export function markStart(now = Date.now()): StartMark {
   };
 }
 
-/** Derive a duration at finalize time, in the session the seizure began. */
-export function resolveDuration(mark: StartMark): ResolvedDuration {
-  const wallMs = Date.now() - mark.startedAtUtc;
+/**
+ * Derive a duration at finalize time, in the session the seizure began.
+ *
+ * Pass the `end` mark captured when the owner stopped the timer. Without it we
+ * measure to *now*, which is save time — and the minutes an owner spends on the
+ * post-seizure and recovery screens are not part of the seizure. `end` is
+ * optional only so a caller with no recorded end (a salvaged row) still has a
+ * path; every live save must supply it.
+ */
+export function resolveDuration(
+  mark: StartMark,
+  end: EndMark | null = null,
+): ResolvedDuration {
+  const wallMs = (end?.endedAtUtc ?? Date.now()) - mark.startedAtUtc;
   const monoStart = mark.startedAtMono;
-  const monoNow = monotonicNow();
+  // When an end mark is given, its monotonic half is the only honest partner
+  // for startedAtMono. Reading the clock again here would reintroduce the very
+  // save-time inflation this parameter exists to remove.
+  const monoEnd = end ? end.endedAtMono : monotonicNow();
 
   const monoMs =
-    monoStart !== null && monoNow !== null ? monoNow - monoStart : null;
+    monoStart !== null && monoEnd !== null ? monoEnd - monoStart : null;
 
   // Monotonic is available and trustworthy — prefer it outright.
   if (monoMs !== null) {

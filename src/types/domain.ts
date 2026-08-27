@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import { DURATION_CONFIDENCES, MAX_PLAUSIBLE_SEIZURE_SECONDS } from '@/utils/clock';
 
+import type { DurationConfidence } from '@/utils/clock';
 export type { DurationConfidence } from '@/utils/clock';
 
 /* ------------------------------------------------------------------ */
@@ -234,17 +235,79 @@ export type Dog = z.infer<typeof DogSchema>;
 /* ------------------------------------------------------------------ */
 /* Seizure                                                             */
 /* ------------------------------------------------------------------ */
+/**
+ * Where a video came from.
+ *   recorded : filmed inside the app during the live seizure flow
+ *   uploaded : imported from the phone's library after the fact
+ *   legacy   : written before this distinction existed
+ */
+export const VIDEO_SOURCES = ['recorded', 'uploaded', 'legacy'] as const;
+export type VideoSource = (typeof VIDEO_SOURCES)[number];
+
+/**
+ * How the app knows WHEN the seizure in a video happened.
+ *
+ * This exists for the same reason DurationConfidence does. A video filmed
+ * inside the live flow carries a timestamp measured to the second. A video the
+ * owner filmed on Tuesday and imported on Friday carries a date they typed
+ * from memory. Both are useful; presenting them identically in a gallery — or
+ * worse, in a vet report — turns a recollection into a measurement.
+ *
+ *   device       : the app was running the timer, so the time is measured
+ *   owner_stated : the owner typed the date and time from memory
+ *   unknown      : imported before this was asked for; do not display a date
+ *                  as though it were the capture time
+ */
+export const CAPTURE_CONFIDENCES = ['device', 'owner_stated', 'unknown'] as const;
+export type CaptureConfidence = (typeof CAPTURE_CONFIDENCES)[number];
+
+export const CAPTURE_CONFIDENCE_LABEL: Record<CaptureConfidence, string> = {
+  device: 'Timed in app',
+  owner_stated: 'Date entered by you',
+  unknown: 'Date unknown',
+};
+
 export const VideoSchema = z.object({
   id: z.string(),
   seizureId: z.string(),
-  source: z.enum(['recorded', 'uploaded', 'legacy']),
+  source: z.enum(VIDEO_SOURCES),
   /** Path inside the app's document directory. Bytes never go in the DB. */
   fileUri: z.string(),
+  /**
+   * WHEN THE SEIZURE IN THIS VIDEO HAPPENED — not when the file was added.
+   * Read `captureConfidence` before showing this to anyone.
+   */
   timestamp: z.number(),
+  /** When the file entered the app. Always measured, never typed. */
+  importedAt: z.number(),
+  captureConfidence: z.enum(CAPTURE_CONFIDENCES),
+  /**
+   * Poster frame, relative to the document directory like every other
+   * app-owned file. '' when extraction failed — the gallery must render a
+   * placeholder rather than assume this is present.
+   */
+  thumbUri: z.string(),
   durationSec: z.number().nullable(),
-  note: z.string(),
+  note: z.string().max(1000),
 });
 export type Video = z.infer<typeof VideoSchema>;
+
+/**
+ * A video plus the little of its seizure the gallery needs.
+ *
+ * Deliberately a projection rather than `Video & { seizure: Seizure }`: the
+ * gallery renders a grid of dozens of tiles and has no use for eight free-text
+ * context fields per row.
+ */
+export type GalleryEntry = {
+  video: Video;
+  seizureStart: number;
+  seizureDurationSec: number;
+  seizureDurationConfidence: DurationConfidence;
+  /** Count of ictal + post-ictal observations, for the "12 noted" tile badge. */
+  observationCount: number;
+  retrospective: boolean;
+};
 
 /**
  * How much the owner trusts the timestamps. A seizure the owner walked in on

@@ -33,7 +33,7 @@
 
 import { create } from 'zustand';
 import * as seizureRepo from '@/db/seizureRepo';
-import { markStart, type StartMark } from '@/utils/clock';
+import { markEnd, markStart, type EndMark, type StartMark } from '@/utils/clock';
 import type { SeizureContext, TimingConfidence } from '@/types/domain';
 
 export type ActiveStage = 'live' | 'post' | 'recovery';
@@ -47,6 +47,15 @@ export type ActiveSeizureDraft = {
   /** Epoch ms. Kept for the screens that already read it. */
   startedAt: number;
   endedAt: number | null;
+  /**
+   * Wall + monotonic marks for the moment the timer was STOPPED. Null until
+   * endSeizure() runs. The monotonic half is never persisted, exactly like
+   * mark.startedAtMono — see Rule 3 above.
+   *
+   * This is what the final duration is measured to. Measuring to save time
+   * instead folded the post-seizure and recovery screens into the number.
+   */
+  endMark: EndMark | null;
   stage: ActiveStage;
 
   /** True when the opening INSERT failed. Timing continues regardless. */
@@ -67,9 +76,16 @@ export type ActiveSeizureDraft = {
   timingConfidence: TimingConfidence;
   context: SeizureContext;
 
-  /** Videos recorded during this seizure, before it is saved to the DB. */
+  /**
+   * Videos recorded during this seizure, before it is saved to the DB.
+   *
+   * `thumbUri` is extracted at capture time rather than lazily in the gallery:
+   * pulling a frame out of a video is slow, and doing it while scrolling a grid
+   * of twenty tiles is exactly the wrong moment. '' when extraction failed.
+   */
   pendingVideos: {
     fileUri: string;
+    thumbUri: string;
     timestamp: number;
     durationSec: number | null;
   }[];
@@ -82,7 +98,20 @@ type ActiveSeizureState = {
   draft: ActiveSeizureDraft | null;
 
   start: (dogId: string) => void;
+  /**
+   * Explicit DISCARD. Marks the row abandoned. Only for a seizure the owner
+   * chose to throw away.
+   */
   cancel: () => void;
+  /**
+   * Drops the in-memory draft WITHOUT touching the row.
+   *
+   * This is the success path. It exists because it used to be `cancel`, which
+   * marked every seizure abandoned the instant after it was saved — and since
+   * every read filters on status='complete', every saved seizure vanished.
+   * Saving and discarding are opposite outcomes and must not share an action.
+   */
+  clearDraft: () => void;
 
   toggleMulti: (
     field: 'ictalObs' | 'autonomic' | 'preIctalObs' | 'postBehavior',
@@ -193,6 +222,7 @@ export const useActiveSeizure = create<ActiveSeizureState>((set, get) => ({
         mark,
         startedAt: mark.startedAtUtc,
         endedAt: null,
+        endMark: null,
         stage: 'live',
         isUnpersisted: false,
         ictalObs: [],
@@ -231,6 +261,18 @@ export const useActiveSeizure = create<ActiveSeizureState>((set, get) => ({
           state.draft ? { draft: { ...state.draft, isUnpersisted: true } } : state,
         );
       });
+  },
+
+  /**
+   * The seizure was saved. Let go of the draft and leave the row alone.
+   *
+   * clearPending() drops any debounced patch still in the buffer, which is
+   * correct here: finalizeSeizure() is handed the whole draft, so everything in
+   * that buffer has already been written by the time we get here.
+   */
+  clearDraft: () => {
+    clearPending();
+    set({ draft: null });
   },
 
   /** Explicit discard. Soft-deletes the row rather than removing it. */
@@ -313,9 +355,17 @@ export const useActiveSeizure = create<ActiveSeizureState>((set, get) => ({
   endSeizure: () =>
     set((state) => {
       if (!state.draft) return state;
-      const endedAt = Date.now();
-      const draft = { ...state.draft, endedAt, stage: 'post' as const };
-      writeNow(draft, { end: endedAt });
+      // Both clocks read at the same instant. endedAt is what goes in the
+      // column; endMark.endedAtMono is what the duration is actually measured
+      // against, and never leaves memory.
+      const end = markEnd();
+      const draft = {
+        ...state.draft,
+        endedAt: end.endedAtUtc,
+        endMark: end,
+        stage: 'post' as const,
+      };
+      writeNow(draft, { end: end.endedAtUtc });
       return { draft };
     }),
 

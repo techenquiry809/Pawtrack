@@ -1,0 +1,1082 @@
+<title>Paws Journal Build Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+/* ============================================================
+   TOKENS — light (bare :root, so the un-stamped default works)
+   Palette is lifted from the app's own src/theme/tokens.ts
+   ============================================================ */
+:root {
+  --paper:      #FAF7F1;
+  --surface:    #FFFFFF;
+  --surface-2:  #F2EDE3;
+  --ink:        #20293A;
+  --ink-soft:   #5B6472;
+  --ink-faint:  #8B93A0;
+  --line:       #E4DCCC;
+  --line-soft:  #EFE9DC;
+
+  --teal:       #2F7E86;
+  --teal-deep:  #215D64;
+  --teal-tint:  #E4EFEE;
+
+  --seizure:    #C63F35;
+  --med:        #B8801F;
+  --checkin:    #0090A0;
+
+  --warn-tint:  #FBF0DD;
+  --warn-ink:   #8A5A17;
+  --crit-tint:  #FBEAE7;
+  --crit-ink:   #A93327;
+
+  --code-bg:    #F4F0E7;
+  --code-ink:   #2B3547;
+
+  --shadow:     0 1px 2px rgba(32,41,58,.05), 0 8px 24px -12px rgba(32,41,58,.18);
+
+  --font-display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --font-body:    'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:      #14191F;
+    --surface:    #1B2129;
+    --surface-2:  #232B34;
+    --ink:        #E9E4D9;
+    --ink-soft:   #A6AEB8;
+    --ink-faint:  #7B848F;
+    --line:       #2E3740;
+    --line-soft:  #262E37;
+
+    --teal:       #5CB4BD;
+    --teal-deep:  #8AD0D6;
+    --teal-tint:  #1D3238;
+
+    --seizure:    #E8776C;
+    --med:        #D9A64A;
+    --checkin:    #3FBBCC;
+
+    --warn-tint:  #33291A;
+    --warn-ink:   #E0B45A;
+    --crit-tint:  #351F1C;
+    --crit-ink:   #EC8C80;
+
+    --code-bg:    #10151A;
+    --code-ink:   #D5D0C4;
+
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper:      #14191F;
+  --surface:    #1B2129;
+  --surface-2:  #232B34;
+  --ink:        #E9E4D9;
+  --ink-soft:   #A6AEB8;
+  --ink-faint:  #7B848F;
+  --line:       #2E3740;
+  --line-soft:  #262E37;
+
+  --teal:       #5CB4BD;
+  --teal-deep:  #8AD0D6;
+  --teal-tint:  #1D3238;
+
+  --seizure:    #E8776C;
+  --med:        #D9A64A;
+  --checkin:    #3FBBCC;
+
+  --warn-tint:  #33291A;
+  --warn-ink:   #E0B45A;
+  --crit-tint:  #351F1C;
+  --crit-ink:   #EC8C80;
+
+  --code-bg:    #10151A;
+  --code-ink:   #D5D0C4;
+
+  --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+}
+
+/* ============================================================
+   BASE
+   ============================================================ */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--teal-deep); text-decoration-color: color-mix(in srgb, var(--teal) 40%, transparent); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--teal); }
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 3px; }
+
+code, kbd {
+  font-family: var(--font-mono);
+  font-size: .82em;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: .12em .38em;
+  border-radius: 4px;
+  border: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   SHELL
+   ============================================================ */
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 24px 120px;
+  display: grid;
+  grid-template-columns: 218px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
+
+/* ---------- masthead ---------- */
+.masthead {
+  grid-column: 1 / -1;
+  padding: 72px 0 44px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 48px;
+}
+
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--teal-deep);
+  margin: 0 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.eyebrow::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--line), transparent);
+}
+
+.masthead h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(38px, 6vw, 62px);
+  line-height: 1.02;
+  letter-spacing: -.03em;
+  margin: 0 0 20px;
+  text-wrap: balance;
+}
+
+.standfirst {
+  font-size: 19px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  max-width: 62ch;
+  margin: 0;
+}
+
+.factbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.fact {
+  flex: 1 1 150px;
+  padding: 14px 18px;
+  border-right: 1px solid var(--line-soft);
+}
+.fact:last-child { border-right: 0; }
+.fact dt {
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 4px;
+}
+.fact dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- side nav ---------- */
+.toc {
+  position: sticky;
+  top: 28px;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.toc h2 {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 14px;
+}
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.toc a {
+  display: flex;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+.toc a:hover { background: var(--surface-2); color: var(--ink); }
+.toc .num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .toc {
+    position: static;
+    margin-bottom: 40px;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .toc ol { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+}
+
+/* ---------- main column ---------- */
+.doc { min-width: 0; }
+
+section.chapter { margin-bottom: 76px; scroll-margin-top: 24px; }
+
+.chapter > h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 27px;
+  letter-spacing: -.018em;
+  line-height: 1.2;
+  margin: 0 0 8px;
+  text-wrap: balance;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+.chapter > h2 .num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--teal);
+  letter-spacing: 0;
+  flex: none;
+}
+
+.chapter > p.lede {
+  color: var(--ink-soft);
+  max-width: 66ch;
+  margin: 0 0 30px;
+}
+
+h3.sub {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 40px 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.doc p { max-width: 66ch; }
+
+/* ---------- tables ---------- */
+.tablewrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+table { border-collapse: collapse; width: 100%; min-width: 560px; }
+thead th {
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: left;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+tbody td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+  font-size: 15.5px;
+  line-height: 1.5;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.pkg {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--ink);
+}
+td.ver {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+td.why { color: var(--ink-soft); }
+
+/* ---------- chips ---------- */
+.chip {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 100px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.chip.core   { background: var(--teal-tint);  color: var(--teal-deep); border-color: color-mix(in srgb, var(--teal) 25%, transparent); }
+.chip.used   { background: var(--surface-2);  color: var(--ink-soft);  border-color: var(--line); }
+.chip.idle   { background: var(--warn-tint);  color: var(--warn-ink);  border-color: color-mix(in srgb, var(--med) 30%, transparent); }
+.chip.peer   { background: transparent;       color: var(--ink-faint); border-color: var(--line); }
+
+/* ---------- layer diagram ---------- */
+.layers { display: flex; flex-direction: column; gap: 0; margin: 8px 0 4px; }
+.layer {
+  display: grid;
+  grid-template-columns: 34px minmax(0,1fr);
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  position: relative;
+}
+.layer:first-child { border-radius: 10px 10px 0 0; }
+.layer:last-child  { border-radius: 0 0 10px 10px; }
+.layer + .layer { border-top: 0; }
+.layer .idx {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--teal);
+  padding-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.layer h4 {
+  font-family: var(--font-display);
+  font-size: 15.5px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  letter-spacing: -.005em;
+}
+.layer h4 span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-faint);
+  margin-left: 10px;
+}
+.layer p { margin: 0; font-size: 15px; color: var(--ink-soft); max-width: 68ch; }
+
+/* ---------- notes ---------- */
+.note {
+  border-left: 3px solid var(--teal);
+  background: var(--teal-tint);
+  padding: 14px 18px;
+  border-radius: 0 8px 8px 0;
+  margin: 26px 0;
+  font-size: 15.5px;
+}
+.note strong { font-family: var(--font-display); font-weight: 700; }
+.note.warn { border-left-color: var(--med); background: var(--warn-tint); }
+.note.warn strong { color: var(--warn-ink); }
+.note p { margin: 0; max-width: 68ch; }
+.note p + p { margin-top: 10px; }
+
+/* ---------- code ---------- */
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  margin: 20px 0;
+}
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--code-ink);
+  white-space: pre;
+  display: block;
+}
+.c-com { color: var(--ink-faint); font-style: italic; }
+.c-key { color: var(--teal); font-weight: 700; }
+.c-str { color: var(--med); }
+
+/* ---------- type reference ---------- */
+.types { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+.typecard {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 15px 17px;
+}
+.typecard h4 {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  color: var(--teal-deep);
+  word-break: break-word;
+}
+.typecard p { margin: 0; font-size: 14.5px; line-height: 1.5; color: var(--ink-soft); max-width: none; }
+.typecard .vals {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-top: 8px;
+  display: block;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* ---------- folder map ---------- */
+.tree {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.85;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+.tree .cm { color: var(--ink-faint); }
+.tree .dir { color: var(--teal-deep); font-weight: 700; }
+
+/* ---------- footer ---------- */
+.colophon {
+  grid-column: 1 / -1;
+  margin-top: 20px;
+  padding-top: 26px;
+  border-top: 1px solid var(--line);
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--ink-faint);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Paws Journal · React Native / Expo</p>
+    <h1>Paws Journal Build Manual</h1>
+    <p class="standfirst">
+      Every package, layer and data type in the codebase, and the reason each one is
+      there. Paws Journal is an offline-first iOS/Android app for owners of dogs with
+      epilepsy: it times a seizure as it happens, records structured observations, and
+      turns months of records into something a veterinarian can read.
+    </p>
+    <dl class="factbar">
+      <div class="fact"><dt>Framework</dt><dd>Expo SDK 57</dd></div>
+      <div class="fact"><dt>Runtime</dt><dd>React Native 0.86.2</dd></div>
+      <div class="fact"><dt>Language</dt><dd>TypeScript 6.0 · strict</dd></div>
+      <div class="fact"><dt>Storage</dt><dd>SQLite · 7 migrations</dd></div>
+      <div class="fact"><dt>Backend</dt><dd>None — on device</dd></div>
+    </dl>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#stack"><span class="num">01</span><span>The stack</span></a></li>
+      <li><a href="#packages"><span class="num">02</span><span>Every package</span></a></li>
+      <li><a href="#absent"><span class="num">03</span><span>What's absent</span></a></li>
+      <li><a href="#layers"><span class="num">04</span><span>The layer stack</span></a></li>
+      <li><a href="#folders"><span class="num">05</span><span>Folder map</span></a></li>
+      <li><a href="#types"><span class="num">06</span><span>Data types</span></a></li>
+      <li><a href="#schema"><span class="num">07</span><span>SQLite schema</span></a></li>
+      <li><a href="#patterns"><span class="num">08</span><span>Patterns to study</span></a></li>
+      <li><a href="#commands"><span class="num">09</span><span>Commands</span></a></li>
+    </ol>
+  </nav>
+
+  <main class="doc">
+
+    <!-- ============================ 01 ============================ -->
+    <section class="chapter" id="stack">
+      <h2><span class="num">01</span>The stack, in one read</h2>
+      <p class="lede">
+        Five decisions define this app. Everything in <code>package.json</code> follows
+        from one of them.
+      </p>
+
+      <div class="layers">
+        <div class="layer">
+          <span class="idx">01</span>
+          <div>
+            <h4>React Native, not a web view <span>react-native 0.86.2</span></h4>
+            <p>Components compile to real native views — a <code>&lt;View&gt;</code> becomes a <code>UIView</code> on iOS and a <code>ViewGroup</code> on Android. You write JavaScript; the user touches native widgets.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">02</span>
+          <div>
+            <h4>Expo, not bare React Native <span>expo ~57.0.16</span></h4>
+            <p>Expo is the framework wrapped around React Native. It ships the native modules (camera, SQLite, notifications) pre-built and version-matched, plus the config system (<code>app.config.ts</code>) that generates the iOS and Android projects for you.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">03</span>
+          <div>
+            <h4>TypeScript in strict mode <span>typescript ~6.0.3</span></h4>
+            <p><code>strict</code>, plus <code>noUncheckedIndexedAccess</code> (array access returns <code>T | undefined</code>) and <code>noImplicitOverride</code>. The <code>@/*</code> path alias maps to <code>./src/*</code>.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">04</span>
+          <div>
+            <h4>SQLite on device, no server <span>expo-sqlite</span></h4>
+            <p>Nothing about the dog leaves the phone. That removes accounts, auth, an API, and a privacy policy about data transfer — and makes the migration system the most safety-critical file in the repo.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">05</span>
+          <div>
+            <h4>File-based routing <span>expo-router ^57.0.16</span></h4>
+            <p>A file in <code>app/</code> <em>is</em> a route. <code>app/(tabs)/history.tsx</code> is the History tab; <code>app/seizure-detail/[id].tsx</code> is a dynamic route. <code>typedRoutes</code> is on, so <code>router.push()</code> paths are type-checked.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <p><strong>Mental model.</strong> React Native is the renderer. Expo is the
+        toolbox and the build system. Expo Router is the navigator. Zustand holds
+        what's on screen right now. SQLite holds what's true. Zod polices the border
+        between the last two.</p>
+      </div>
+    </section>
+
+    <!-- ============================ 02 ============================ -->
+    <section class="chapter" id="packages">
+      <h2><span class="num">02</span>Every package in the project</h2>
+      <p class="lede">
+        Grouped by job. The status chip tells you whether the package has real importers
+        in <code>app/</code> or <code>src/</code> today — worth knowing, because an unused
+        native module still costs build time and can still cost you an app review.
+      </p>
+
+      <h3 class="sub">Core framework</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Package</th><th>Version</th><th>What it does</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">expo</td><td class="ver">~57.0.16</td><td class="why">The framework. Native runtime, module registry, config pipeline.</td><td><span class="chip core">Core</span></td></tr>
+            <tr><td class="pkg">react</td><td class="ver">19.2.3</td><td class="why">Component model, hooks, state.</td><td><span class="chip core">Core</span></td></tr>
+            <tr><td class="pkg">react-native</td><td class="ver">0.86.2</td><td class="why">Renders components to native views; supplies <code>View</code>, <code>Text</code>, <code>StyleSheet</code>, <code>Pressable</code>, <code>FlatList</code>.</td><td><span class="chip core">Core</span></td></tr>
+            <tr><td class="pkg">react-dom</td><td class="ver">19.2.3</td><td class="why">Only needed if the app is ever run on web. Kept for parity with React.</td><td><span class="chip peer">Peer</span></td></tr>
+            <tr><td class="pkg">typescript</td><td class="ver">~6.0.3</td><td class="why">Dev dependency. Compile-time types; never ships in the bundle.</td><td><span class="chip core">Core</span></td></tr>
+            <tr><td class="pkg">@types/react</td><td class="ver">~19.2.2</td><td class="why">Type definitions for React. Dev dependency.</td><td><span class="chip core">Core</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub">Navigation</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Package</th><th>Version</th><th>What it does</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">expo-router</td><td class="ver">^57.0.16</td><td class="why">File-based routing, nested layouts (<code>_layout.tsx</code>), typed paths, deep linking.</td><td><span class="chip core">Core</span></td></tr>
+            <tr><td class="pkg">react-native-screens</td><td class="ver">~4.26.0</td><td class="why">Backs each route with a real native screen container, so transitions and memory behave natively.</td><td><span class="chip peer">Peer</span></td></tr>
+            <tr><td class="pkg">react-native-safe-area-context</td><td class="ver">~5.7.0</td><td class="why">Reports notch and home-indicator insets. Used by the floating glass tab bar.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-linking</td><td class="ver">^57.0.7</td><td class="why">Deep links on the <code>pawsjournal://</code> scheme. Required by the router, not imported directly.</td><td><span class="chip peer">Peer</span></td></tr>
+            <tr><td class="pkg">expo-constants</td><td class="ver">^57.0.14</td><td class="why">Reads <code>app.config.ts</code> values at runtime. Router dependency.</td><td><span class="chip peer">Peer</span></td></tr>
+            <tr><td class="pkg">react-native-reanimated</td><td class="ver">4.5.1</td><td class="why">Animations that run on the UI thread. Pulled in as a router/screens peer; no direct imports yet.</td><td><span class="chip peer">Peer</span></td></tr>
+            <tr><td class="pkg">react-native-worklets</td><td class="ver">0.10.1</td><td class="why">The worklet runtime Reanimated 4 is built on. Never imported by hand.</td><td><span class="chip peer">Peer</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub">Data and state</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Package</th><th>Version</th><th>What it does</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">expo-sqlite</td><td class="ver">^57.0.1</td><td class="why">The database. One connection opened in <code>src/db/client.ts</code>, WAL journal mode, foreign keys on.</td><td><span class="chip core">Core</span></td></tr>
+            <tr><td class="pkg">zustand</td><td class="ver">^5.0.15</td><td class="why">Two small stores: <code>appStore</code> (active dog, settings) and <code>activeSeizureStore</code> (the in-progress seizure draft).</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">zod</td><td class="ver">^4.4.3</td><td class="why">Runtime validation at the DB boundary. Every domain type in <code>src/types/domain.ts</code> is inferred from a Zod schema.</td><td><span class="chip used">In use</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub">Device and native capabilities</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Package</th><th>Version</th><th>What it does</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">expo-image-picker</td><td class="ver">^57.0.13</td><td class="why">Launches the system camera to record a seizure video, and the library to attach an existing one. Also the dog profile photo.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-file-system</td><td class="ver">^57.0.5</td><td class="why">Copies captured media into the app's document directory. Paths are stored relative — see migration 7.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-notifications</td><td class="ver">^57.0.14</td><td class="why">Local-only medication reminders. No push server exists.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-haptics</td><td class="ver">^57.0.1</td><td class="why">Vibration at the 3- and 5-minute seizure thresholds. Redundant channel so colour is never the only signal.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-keep-awake</td><td class="ver">^57.0.1</td><td class="why">Holds the screen on during a live seizure. Safety-relevant, not a convenience.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-camera</td><td class="ver">^57.0.4</td><td class="why">In-app camera preview. Installed, but zero importers — capture goes through the system camera instead.</td><td><span class="chip idle">No importers</span></td></tr>
+            <tr><td class="pkg">expo-print</td><td class="ver">^57.0.1</td><td class="why">Will render the vet report to PDF. Installed ahead of the feature.</td><td><span class="chip idle">Not wired</span></td></tr>
+            <tr><td class="pkg">expo-sharing</td><td class="ver">^57.0.15</td><td class="why">Will open the OS share sheet to send that PDF. Installed ahead of the feature.</td><td><span class="chip idle">Not wired</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub">UI and presentation</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Package</th><th>Version</th><th>What it does</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">expo-glass-effect</td><td class="ver">~57.0.1</td><td class="why">Native liquid-glass material. Drives the floating tab bar and primary buttons, with a graceful fallback via <code>useGlassSupport()</code>.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-blur</td><td class="ver">~57.0.2</td><td class="why">Blur surfaces where the glass effect is unavailable.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-linear-gradient</td><td class="ver">~57.0.1</td><td class="why">Gradient fills — header wash, chart backgrounds.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">@expo/vector-icons</td><td class="ver">^15.0.2</td><td class="why">Icon set, wrapped once in <code>src/components/Icon.tsx</code> so glyph names live in one place.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-status-bar</td><td class="ver">~57.0.1</td><td class="why">Controls status-bar style per screen.</td><td><span class="chip used">In use</span></td></tr>
+            <tr><td class="pkg">expo-font</td><td class="ver">~57.0.1</td><td class="why">Custom font loading. Present as a dependency of the icon set.</td><td><span class="chip peer">Peer</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ 03 ============================ -->
+    <section class="chapter" id="absent">
+      <h2><span class="num">03</span>What is deliberately absent</h2>
+      <p class="lede">
+        Knowing what a codebase refuses is as instructive as knowing what it uses. Each of
+        these is a common React Native choice this project turned down.
+      </p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Not installed</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">redux · mobx</td><td class="why">Zustand covers the two pieces of shared state at a fraction of the ceremony. No reducers, no providers.</td></tr>
+            <tr><td class="pkg">nativewind · styled-components</td><td class="why">Extra build step for no gain at this size. Styling is <code>StyleSheet</code> plus the tokens in <code>src/theme/tokens.ts</code>.</td></tr>
+            <tr><td class="pkg">react-hook-form</td><td class="why">The forms are chip toggles and a handful of text inputs. Plain controlled components are enough.</td></tr>
+            <tr><td class="pkg">moment · date-fns · dayjs</td><td class="why">Native <code>Date</code> and <code>Intl</code> handle the formatting and arithmetic, DST included. Date maths lives in <code>src/utils/time.ts</code> and <code>clock.ts</code>.</td></tr>
+            <tr><td class="pkg">axios</td><td class="why">There is no backend to call.</td></tr>
+            <tr><td class="pkg">an ORM (Drizzle, WatermelonDB)</td><td class="why">Hand-written SQL in repositories keeps the migration path explicit, which matters more than query ergonomics for health records.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note warn">
+        <p><strong>The native-config rule this repo follows.</strong> Native configuration
+        lands in the same change as the feature that needs it, never ahead of it. Apple
+        checks that declared permissions correspond to functionality that actually exists
+        (guideline 5.1.1), and Google Play treats an over-broad Data Safety declaration as
+        a policy violation in the other direction. That is why <code>expo-camera</code> has
+        no plugin entry despite being installed.</p>
+      </div>
+    </section>
+
+    <!-- ============================ 04 ============================ -->
+    <section class="chapter" id="layers">
+      <h2><span class="num">04</span>The layer stack</h2>
+      <p class="lede">
+        Data moves down this stack on a write and back up on a read. The rule that makes it
+        work: a layer may only talk to the one directly below it. A screen that imports
+        <code>getDb()</code> has broken the architecture.
+      </p>
+
+      <div class="layers">
+        <div class="layer">
+          <span class="idx">01</span>
+          <div>
+            <h4>Screens <span>app/</span></h4>
+            <p>18 route files. They render, collect input, and call stores or repositories. They contain no SQL and no business rules.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">02</span>
+          <div>
+            <h4>Components <span>src/components/</span></h4>
+            <p>12 presentational pieces — <code>FloatingTabBar</code>, <code>LiquidGlassButton</code>, <code>CheckinCalendar</code>, <code>ProfileHeader</code>, <code>RecordSeizureFab</code>, <code>UnfinishedSeizurePrompt</code>. Props in, JSX out.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">03</span>
+          <div>
+            <h4>Stores <span>src/store/</span></h4>
+            <p><code>appStore</code> holds the active dog, the dog list and settings, and hydrates from SQLite on launch. <code>activeSeizureStore</code> holds the draft of a seizure being captured right now, in memory, with a pending-writes queue.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">04</span>
+          <div>
+            <h4>Services <span>src/services/</span></h4>
+            <p>Side effects that are not database work: <code>videoService</code>, <code>dogPhotoService</code>, <code>fileStore</code> (relative ⇄ absolute paths), <code>medicationReminders</code> (schedule, cancel, reschedule on timezone change), <code>saveActiveSeizure</code> (the draft-to-record commit).</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">05</span>
+          <div>
+            <h4>Features <span>src/features/</span></h4>
+            <p>Pure computation over already-loaded records, no I/O. <code>analytics</code> derives time-of-day bands, duration stats, frequency comparisons and sleep/stress associations, each gated behind a confidence level. <code>timeline</code> merges seizures, doses and check-ins into day-grouped sections.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">06</span>
+          <div>
+            <h4>Repositories <span>src/db/*Repo.ts</span></h4>
+            <p>The only place SQL is written. <code>dogRepo</code>, <code>seizureRepo</code> (607 lines — open, patch, finalize, salvage, discard), <code>checkinRepo</code>, <code>medicationRepo</code>. Each maps SQL rows to domain objects and back.</p>
+          </div>
+        </div>
+        <div class="layer">
+          <span class="idx">07</span>
+          <div>
+            <h4>Client &amp; migrations <span>src/db/client.ts · migrations.ts</span></h4>
+            <p>One lazily-opened connection, plus the <code>toSqlBool</code> / <code>fromSqlObject</code> / <code>fromSqlArray</code> mapping helpers and the versioned migration runner.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ 05 ============================ -->
+    <section class="chapter" id="folders">
+      <h2><span class="num">05</span>Folder map</h2>
+      <p class="lede">
+        Two top-level source trees. <code>app/</code> is routes only — anything that is not
+        a screen lives in <code>src/</code>.
+      </p>
+
+      <div class="tree"><span class="dir">app/</span>                         <span class="cm"># every file here is a route</span>
+  _layout.tsx              <span class="cm"># root layout: DB init, store hydration</span>
+  onboarding.tsx           <span class="cm"># first-run dog setup</span>
+  breed-picker.tsx         <span class="cm"># modal, structured breed selection</span>
+  dog-profile.tsx
+  daily-checkin.tsx
+  medication-edit.tsx
+  emergency-plan.tsx
+  report.tsx               <span class="cm"># vet report</span>
+  <span class="dir">(tabs)/</span>                  <span class="cm"># route group — parens = no URL segment</span>
+    _layout.tsx            <span class="cm"># the floating glass tab bar</span>
+    index.tsx              <span class="cm"># Today</span>
+    history.tsx
+    checkin.tsx
+    more.tsx
+  <span class="dir">seizure/</span>                 <span class="cm"># the capture flow, in phase order</span>
+    _layout.tsx
+    live.tsx               <span class="cm"># the running timer</span>
+    post.tsx               <span class="cm"># post-ictal observations</span>
+    recovery.tsx           <span class="cm"># recovery timing, then save</span>
+  <span class="dir">seizure-detail/</span>
+    [id].tsx               <span class="cm"># dynamic route</span>
+
+<span class="dir">src/</span>
+  <span class="dir">components/</span>              <span class="cm"># 12 presentational components</span>
+  <span class="dir">constants/</span>  breeds.ts    <span class="cm"># generated by scripts/build-breeds.ts</span>
+  <span class="dir">db/</span>          client.ts migrations.ts *Repo.ts
+  <span class="dir">features/</span>    analytics/ timeline/
+  <span class="dir">hooks/</span>       useSeizureTimer.ts
+  <span class="dir">services/</span>    video · dogPhoto · fileStore · reminders · save
+  <span class="dir">store/</span>       appStore.ts activeSeizureStore.ts
+  <span class="dir">theme/</span>       tokens.ts glass.ts chrome.ts
+  <span class="dir">types/</span>       domain.ts    <span class="cm"># the whole domain model, one file</span>
+  <span class="dir">utils/</span>       clock.ts time.ts nav.ts
+
+<span class="dir">docs/</span>          ARCHITECTURE · TOOLSET · WORKFLOW · DEVLOG
+<span class="dir">ios/</span>           <span class="cm"># generated native project — do not hand-edit</span>
+app.config.ts  <span class="cm"># the single source of native config</span></div>
+    </section>
+
+    <!-- ============================ 06 ============================ -->
+    <section class="chapter" id="types">
+      <h2><span class="num">06</span>Data types</h2>
+      <p class="lede">
+        Everything lives in <code>src/types/domain.ts</code>. The pattern throughout: define
+        a Zod schema, then derive the TypeScript type from it with
+        <code>z.infer</code> — one definition serving both compile time and runtime.
+      </p>
+
+      <pre><code><span class="c-com">// The pattern, in three lines</span>
+<span class="c-key">export const</span> MedicationSchema = z.object({
+  name: z.string().min(<span class="c-str">1</span>).max(<span class="c-str">120</span>),
+  dose: z.string().max(<span class="c-str">60</span>),
+});
+<span class="c-key">export type</span> Medication = z.infer&lt;<span class="c-key">typeof</span> MedicationSchema&gt;;</code></pre>
+
+      <h3 class="sub">The seven entities</h3>
+      <div class="types">
+        <div class="typecard"><h4>Dog</h4><p>The subject. Name, structured breed, sex, DOB, weight, diagnosis status, allergies, diet, two vet contacts, and the emergency plan.</p></div>
+        <div class="typecard"><h4>Seizure</h4><p>The core record. 30+ fields across lifecycle, timing, pre-ictal, ictal, post-ictal, recovery, context and notes.</p></div>
+        <div class="typecard"><h4>Video</h4><p>Media attached to a seizure. Stores a path, never bytes — the file lives in the document directory.</p></div>
+        <div class="typecard"><h4>Medication</h4><p>What the vet prescribed, as the owner typed it. The app never suggests a dose.</p></div>
+        <div class="typecard"><h4>MedicationReminder</h4><p>A local wall-clock time in its own table, because anticonvulsants are dosed 2–3× daily.</p></div>
+        <div class="typecard"><h4>MedicationDose</h4><p>What actually happened, which is a different question from what was prescribed. Owner-reported only.</p></div>
+        <div class="typecard"><h4>DailyCheckin</h4><p>The control dataset. Without non-seizure days, every "association" is measured against nothing.</p></div>
+        <div class="typecard"><h4>Meal</h4><p>The one context entity that is already structured rather than free text.</p></div>
+      </div>
+
+      <h3 class="sub">Union types (derived from <code>as const</code> arrays)</h3>
+      <p>
+        Each vocabulary is declared once as a frozen array. The UI maps over it to render
+        chips; TypeScript derives the union from the same source with
+        <code>(typeof X)[number]</code>. Add an option in one place and both update.
+      </p>
+      <div class="types">
+        <div class="typecard"><h4>SeizureStatus</h4><p>Lifecycle of the record — not a clinical field. Only <code>complete</code> rows reach history or a report.</p><span class="vals">'in_progress' | 'complete' | 'abandoned'</span></div>
+        <div class="typecard"><h4>DurationConfidence</h4><p>How far <code>durationSec</code> can be trusted on this row.</p><span class="vals">'high' | 'clock_corrected' | 'recovered' | 'unreliable' | 'legacy'</span></div>
+        <div class="typecard"><h4>TimingConfidence</h4><p>How much the owner trusts their own timestamps.</p><span class="vals">'exact' | 'approximate' | 'unknown'</span></div>
+        <div class="typecard"><h4>DiagnosisStatus</h4><p>Where the dog is in the diagnostic process.</p><span class="vals">'undiagnosed' | 'suspected' | 'diagnosed'</span></div>
+        <div class="typecard"><h4>DoseStatus</h4><p>Owner-reported outcome for one scheduled dose.</p><span class="vals">'given' | 'late' | 'missed'</span></div>
+        <div class="typecard"><h4>ActiveStage</h4><p>Which phase of the capture flow the draft is in.</p><span class="vals">'live' | 'post' | 'recovery'</span></div>
+        <div class="typecard"><h4>MovementObservation</h4><p>Ictal movements. 9 options.</p><span class="vals">'Stiffening' | 'Paddling' | 'Jerking' | …</span></div>
+        <div class="typecard"><h4>AwarenessObservation</h4><p>Consciousness during the event. 5 options.</p><span class="vals">'Appears unconscious' | 'Partially aware' | …</span></div>
+        <div class="typecard"><h4>AutonomicObservation</h4><p>Autonomic signs. 6 options.</p><span class="vals">'Drooling/salivation' | 'Urinated' | …</span></div>
+        <div class="typecard"><h4>PositionObservation</h4><p>Body position at onset. 5 options.</p><span class="vals">'Standing' | 'Sitting' | 'Lying on side' | …</span></div>
+        <div class="typecard"><h4>PreIctalObservation</h4><p>Warning signs before onset. 12 options.</p><span class="vals">'Restlessness' | 'Anxiety' | 'Hiding' | …</span></div>
+        <div class="typecard"><h4>PostBehaviorObservation</h4><p>Post-ictal behaviour. 14 options.</p><span class="vals">'Confused' | 'Disoriented' | 'Very sleepy' | …</span></div>
+        <div class="typecard"><h4>OwnerSeverity</h4><p>Explicitly owner-observed, never a clinical grade. The UI must say so.</p><span class="vals">'Mild-looking' | 'Moderate-looking' | 'Severe-looking' | 'Unsure'</span></div>
+        <div class="typecard"><h4>Confidence</h4><p>Analytics gate — how much weight a derived pattern may be given.</p><span class="vals">'early' | 'possible' | 'repeated' | 'strong'</span></div>
+        <div class="typecard"><h4>TimelineEventKind</h4><p>What kind of event a timeline row represents.</p><span class="vals">'seizure' | 'medication' | 'checkin'</span></div>
+        <div class="typecard"><h4>ThresholdLevel</h4><p>Where the running timer sits against the warn/critical thresholds.</p><span class="vals">'none' | 'warn' | 'critical'</span></div>
+      </div>
+
+      <h3 class="sub">Composite and support types</h3>
+      <div class="types">
+        <div class="typecard"><h4>Breed</h4><p>Structured, never free text — <code>breedId</code>, <code>breedName</code>, <code>breedSource</code>, plus a 200-char owner description.</p></div>
+        <div class="typecard"><h4>SeizureContext</h4><p>Eight free-text factors: food, sleep, exercise, medication, stress, environment, illness, exposure. A known limitation, documented as one.</p></div>
+        <div class="typecard"><h4>VetContact · EmergencyPlan</h4><p>Owner- or vet-entered only. The app must never generate, suggest or autofill any field.</p></div>
+        <div class="typecard"><h4>SeizureFinalize</h4><p>The finalize gate. A Zod <code>superRefine</code> that <em>refuses</em> bad durations rather than correcting them.</p></div>
+        <div class="typecard"><h4>SeizureWithVideos</h4><p><code>Seizure &amp; { videos: Video[] }</code> — the joined shape for detail screens.</p></div>
+        <div class="typecard"><h4>Settings</h4><p>Warn/critical minute thresholds, cluster window and count, haptics on/off. Configurable because care plans differ.</p></div>
+      </div>
+
+      <div class="note">
+        <p><strong>Read <code>SeizureFinalizeSchema</code> closely.</strong> Every rule in it
+        is a refusal, never a correction: a null duration cannot be high confidence, and a
+        zero-second seizure is rejected as a mis-tap. A silently repaired duration is
+        indistinguishable from a measured one in an export — a refusal produces a question,
+        a correction produces a false fact.</p>
+      </div>
+    </section>
+
+    <!-- ============================ 07 ============================ -->
+    <section class="chapter" id="schema">
+      <h2><span class="num">07</span>SQLite schema and migrations</h2>
+      <p class="lede">
+        Nine tables. Version tracked in SQLite's built-in <code>user_version</code> pragma;
+        each migration runs inside a transaction that also writes the version bump, so a
+        crash mid-migration cannot leave a half-applied schema.
+      </p>
+
+      <h3 class="sub">Tables</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Table</th><th>Holds</th><th>Key indexes</th></tr></thead>
+          <tbody>
+            <tr><td class="pkg">dogs</td><td class="why">One row per dog. Breed flattened into four columns; vet, emergency vet and plan stored as JSON.</td><td class="why">Primary key only</td></tr>
+            <tr><td class="pkg">seizures</td><td class="why">The core record. Observation arrays as JSON strings, context as a JSON object.</td><td class="why"><code>(dog_id, start DESC)</code></td></tr>
+            <tr><td class="pkg">seizure_edits</td><td class="why">Append-only audit trail of edits to a record.</td><td class="why"><code>(seizure_id, edited_at DESC)</code></td></tr>
+            <tr><td class="pkg">videos</td><td class="why">Media references. Relative paths, never bytes.</td><td class="why"><code>(seizure_id)</code></td></tr>
+            <tr><td class="pkg">medications</td><td class="why">Prescriptions as entered by the owner.</td><td class="why"><code>(dog_id)</code></td></tr>
+            <tr><td class="pkg">medication_reminders</td><td class="why">Local wall-clock reminder slots, one row each.</td><td class="why">unique <code>(medication_id, time)</code></td></tr>
+            <tr><td class="pkg">medication_doses</td><td class="why">What actually happened, per day per slot.</td><td class="why">unique per slot; <code>(dog_id, dose_date DESC)</code></td></tr>
+            <tr><td class="pkg">daily_checkins</td><td class="why">The control dataset — one per dog per calendar day.</td><td class="why">unique <code>(dog_id, check_in_date)</code></td></tr>
+            <tr><td class="pkg">meals</td><td class="why">Structured feeding log.</td><td class="why"><code>(dog_id, timestamp DESC)</code></td></tr>
+            <tr><td class="pkg">app_state</td><td class="why">Key/value store for settings and the active dog id.</td><td class="why">Primary key only</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sub">Migration history</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>#</th><th>Name</th><th>What it changed and why</th></tr></thead>
+          <tbody>
+            <tr><td class="ver">1</td><td class="pkg">initial schema</td><td class="why">Seven tables. Replaced the web prototype's single JSON blob, which rewrote the whole dataset on every save and could not be queried.</td></tr>
+            <tr><td class="ver">2</td><td class="pkg">seizure edit audit trail</td><td class="why">Added <code>seizure_edits</code> without touching the seizures table.</td></tr>
+            <tr><td class="ver">3</td><td class="pkg">seizure record durability</td><td class="why">Added <code>status</code>, <code>duration_confidence</code>, <code>last_touched_at</code>, <code>tz_offset_min</code>. Makes SQLite the source of truth from the first tap, so a force-quit mid-seizure cannot lose the record.</td></tr>
+            <tr><td class="ver">4</td><td class="pkg">check-in day key, reminders, doses</td><td class="why">Added <code>check_in_date</code> with a unique index, plus the two medication tables.</td></tr>
+            <tr><td class="ver">5</td><td class="pkg">dog photo</td><td class="why">Added <code>photo_uri</code> to dogs.</td></tr>
+            <tr><td class="ver">6</td><td class="pkg">backfilled check-ins</td><td class="why">Added a <code>backfilled</code> flag — recalled from memory is weaker evidence than recorded that evening, and the analytics engine needs to know which it has.</td></tr>
+            <tr><td class="ver">7</td><td class="pkg">relative file paths</td><td class="why">Rewrote stored media paths to drop the absolute prefix. iOS reassigns the app container UUID on reinstall, so every absolute path written before this pointed at a container that no longer exists.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn">
+        <p><strong>Never edit a shipped migration.</strong> Add a new one. Editing a
+        migration that has already run on someone's phone corrupts their database — their
+        <code>user_version</code> already says it ran, so the fix never applies.</p>
+      </div>
+    </section>
+
+    <!-- ============================ 08 ============================ -->
+    <section class="chapter" id="patterns">
+      <h2><span class="num">08</span>Patterns worth studying</h2>
+      <p class="lede">
+        Six ideas in this codebase that transfer to any app you build next.
+      </p>
+
+      <h3 class="sub">SQLite has no boolean and no array</h3>
+      <p>
+        Booleans are stored as <code>0</code>/<code>1</code>, arrays and objects as JSON
+        strings. The conversion lives in exactly one file so it cannot drift between
+        repositories. The subtle part is reading it back: <code>'{}'</code> is valid JSON
+        and is the column <em>default</em>, so a naive parse returns an object where every
+        field is <code>undefined</code> — which TypeScript happily accepts and which throws
+        on the first property read.
+      </p>
+      <pre><code><span class="c-com">// Merging onto a complete default makes a partial object impossible</span>
+<span class="c-key">export function</span> fromSqlObject&lt;T <span class="c-key">extends</span> object&gt;(value: string | <span class="c-key">null</span>, defaults: T): T {
+  <span class="c-key">const</span> raw = fromSqlJson&lt;Partial&lt;T&gt; | <span class="c-key">null</span>&gt;(value, <span class="c-key">null</span>);
+  <span class="c-key">if</span> (!raw || <span class="c-key">typeof</span> raw !== <span class="c-str">'object'</span> || Array.isArray(raw)) <span class="c-key">return</span> { ...defaults };
+  <span class="c-key">return</span> { ...defaults, ...raw };
+}</code></pre>
+
+      <h3 class="sub">One <code>as const</code> array, two consumers</h3>
+      <p>
+        A vocabulary is declared once. The UI maps over the array to render chips; the type
+        system derives the union from the same array. There is no second list to forget to
+        update — and because the strings are stored verbatim in the database, renaming one
+        would orphan historical records, which the type system now makes visible.
+      </p>
+
+      <h3 class="sub">The repository pattern</h3>
+      <p>
+        SQL exists only inside <code>src/db/*Repo.ts</code>. Screens call
+        <code>listSeizures(dogId)</code>, not a query. This is what makes the schema
+        changeable: migration 7 rewrote every stored path and no screen needed editing.
+      </p>
+
+      <h3 class="sub">Validate at the boundary, not everywhere</h3>
+      <p>
+        Zod runs where data <em>enters</em> the program — coming out of SQLite, or out of an
+        imported backup. Once a value is a validated <code>Seizure</code>, the rest of the
+        code trusts the TypeScript type and does not re-check. For a local-only app the
+        justification is specific: this is health data a vet may act on, so a corrupt row
+        should raise a loud catchable error rather than a silently wrong duration.
+      </p>
+
+      <h3 class="sub">Never trust a UI tick counter for elapsed time</h3>
+      <p>
+        Duration is always derived from an absolute start timestamp and recomputed when the
+        app returns to the foreground — never accumulated from a <code>setInterval</code>.
+        That is also why the app declares no <code>UIBackgroundModes</code>: suspending
+        JavaScript costs nothing, and declaring a background audio mode you do not use is a
+        documented App Review rejection (guideline 2.5.4).
+      </p>
+
+      <h3 class="sub">Write the row before you have the data</h3>
+      <p>
+        <code>openSeizure()</code> inserts an <code>in_progress</code> row on the very first
+        tap. <code>patchSeizure()</code> updates it as the owner moves through phases.
+        <code>finalizeSeizure()</code> flips it to <code>complete</code>. If the app dies
+        mid-seizure, <code>findUnfinishedSeizure()</code> and <code>salvageSeizure()</code>
+        recover it — using <code>last_touched_at</code> rather than "now", because the owner
+        may find the orphaned row the next morning and "now" would report a six-hour seizure.
+      </p>
+    </section>
+
+    <!-- ============================ 09 ============================ -->
+    <section class="chapter" id="commands">
+      <h2><span class="num">09</span>Commands</h2>
+      <p class="lede">
+        The distinction that matters day to day: a JavaScript change needs only Metro; a
+        native change needs a rebuild.
+      </p>
+
+      <h3 class="sub">Everyday</h3>
+      <pre><code>npm start              <span class="c-com"># expo start — Metro dev server; press i / a to open</span>
+npm run start:clear    <span class="c-com"># same, with the bundler cache wiped</span>
+npm run typecheck      <span class="c-com"># tsc --noEmit — run this before every commit</span>
+npm run doctor         <span class="c-com"># expo-doctor — checks package versions match the SDK</span></code></pre>
+
+      <h3 class="sub">Native builds</h3>
+      <pre><code>npm run ios            <span class="c-com"># expo run:ios — compiles the native project, installs, launches</span>
+npm run android        <span class="c-com"># expo run:android</span>
+
+npx expo run:ios --device <span class="c-str">"iPhone 17 Pro"</span>   <span class="c-com"># pick a simulator explicitly</span>
+cd ios &amp;&amp; pod install &amp;&amp; cd ..              <span class="c-com"># after adding a native dependency</span></code></pre>
+
+      <div class="note">
+        <p><strong>When do you actually need a rebuild?</strong> Only when native code
+        changes: a new native module, an edit to the <code>plugins</code> array or
+        <code>infoPlist</code> in <code>app.config.ts</code>, a permissions change, or
+        anything under <code>ios/</code>. Editing a <code>.tsx</code> or <code>.ts</code>
+        file is a Fast Refresh — save the file and the simulator updates itself.</p>
+      </div>
+
+      <h3 class="sub">Cloud builds and release</h3>
+      <pre><code>npx eas build --profile development --platform ios   <span class="c-com"># your own dev client</span>
+npx eas build --profile production --platform ios    <span class="c-com"># .ipa, built on Expo's Macs</span>
+npx eas submit --platform ios                        <span class="c-com"># upload to App Store Connect</span>
+npx eas update                                       <span class="c-com"># JS-only fix, no store review</span></code></pre>
+
+      <p>
+        EAS Build compiles on Expo's machines, which is how an iOS build happens without a
+        Mac. A local <code>expo run:ios</code> needs Xcode; a local
+        <code>expo run:android</code> needs Android Studio.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="colophon">
+    <span>Paws Journal · <code>com.pawsjournal.app</code></span>
+    <span>Expo SDK 57 · React Native 0.86.2</span>
+    <span>Palette from the app's own <code>src/theme/tokens.ts</code></span>
+  </footer>
+
+</div>

@@ -24,6 +24,39 @@ export function formatDuration(seconds: number | null | undefined): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+/**
+ * '13h 47m' / '3d 4h' / '45m' — for the GAP BETWEEN two events.
+ *
+ * Deliberately separate from formatDuration. That one formats how long a
+ * seizure lasted, where minutes-and-seconds is the right resolution and hours
+ * never occur. This one formats how long it has been SINCE something, where
+ * minutes-and-seconds produces "827m 33s" — a number no owner can read and no
+ * vet would ever write down.
+ *
+ * Resolution drops as the interval grows, which is how people actually talk
+ * about elapsed time: seconds matter within a minute, they are noise after a
+ * day.
+ */
+export function formatInterval(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return '—';
+  const total = Math.max(0, Math.round(seconds));
+
+  if (total < 60) return `${total}s`;
+
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) {
+    return restMinutes > 0 ? `${hours}h ${restMinutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours > 0 ? `${days}d ${restHours}h` : `${days}d`;
+}
+
 /** '02:14' — for the running timer. Always zero-padded, stable width. */
 export function formatClock(seconds: number): string {
   const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;

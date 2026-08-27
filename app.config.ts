@@ -41,6 +41,13 @@ const config: ExpoConfig = {
         "Paws Journal records audio with seizure videos, because vocalisation can be clinically relevant.",
       NSPhotoLibraryUsageDescription:
         'Paws Journal lets you attach a video you already recorded to a seizure record.',
+      // ADD-ONLY, and deliberately separate from the string above. Saving a
+      // seizure video back to Photos does not require the ability to read the
+      // owner's library, and iOS shows a materially gentler prompt for
+      // add-only access — so the narrower ask also gets granted more often.
+      // expo-media-library is requested with writeOnly: true to match.
+      NSPhotoLibraryAddUsageDescription:
+        'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
       // NOTE: there is deliberately NO UIBackgroundModes entry here.
       // The seizure timer does not need one — elapsed time is derived from an
       // absolute start timestamp and recomputed the instant the app returns to
@@ -76,6 +83,16 @@ const config: ExpoConfig = {
       'READ_MEDIA_VIDEO',
       'POST_NOTIFICATIONS',
       'VIBRATE',
+      // Needed only on Android 9 and below, where saving into shared media
+      // still goes through the legacy external-storage path. Android 10+ uses
+      // scoped storage and ignores it.
+      //
+      // expo-media-library's plugin declares this itself, UNCAPPED — its
+      // withPermissions path writes android:name and nothing else. Listing it
+      // here is therefore redundant for presence but useful as the record of
+      // why it is in the manifest at all. The maxSdkVersion cap that keeps it
+      // off modern devices comes from ./plugins/withCappedLegacyStorage.
+      'WRITE_EXTERNAL_STORAGE',
     ],
   },
 
@@ -116,6 +133,25 @@ const config: ExpoConfig = {
       },
     ],
     'expo-sqlite',
+    [
+      'expo-media-library',
+      {
+        savePhotosPermission:
+          'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
+        // We never read the library through this module — video IMPORT goes
+        // through expo-image-picker, which has its own narrower prompt. Asking
+        // for read access here would be scope we do not use.
+        photosPermission:
+          'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
+        isAccessMediaLocationEnabled: false,
+      },
+    ],
+    // Playback in the gallery. expo-video replaces expo-av's Video component,
+    // which is deprecated — do not add expo-av back for this.
+    'expo-video',
+    // MUST come after expo-media-library: it caps the legacy storage
+    // permissions that plugin adds uncapped. See the file for why.
+    './plugins/withCappedLegacyStorage',
   ],
 
   experiments: {

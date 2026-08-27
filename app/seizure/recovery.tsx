@@ -33,7 +33,13 @@ export default function RecoveryScreen() {
   const insets = useSafeAreaInsets();
 
   const draft = useActiveSeizure((s) => s.draft);
-  const clearDraft = useActiveSeizure((s) => s.cancel);
+  // Two DIFFERENT actions, and the distinction is the whole bug that was here.
+  // `clearDraft` lets go of a saved seizure; `discardDraft` throws an unsaved
+  // one away and marks the row abandoned. This screen used to use the discard
+  // action for both, so every seizure it saved was abandoned a statement later
+  // and then filtered out of every read in the app.
+  const clearDraft = useActiveSeizure((s) => s.clearDraft);
+  const discardDraft = useActiveSeizure((s) => s.cancel);
 
   const [saving, setSaving] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -102,7 +108,9 @@ export default function RecoveryScreen() {
                 text: 'Discard',
                 style: 'destructive',
                 onPress: () => {
-                  clearDraft();
+                  // A genuine discard: the record was refused, so the row must
+                  // be marked abandoned rather than merely forgotten.
+                  discardDraft();
                   router.replace('/(tabs)');
                 },
               },
@@ -117,7 +125,7 @@ export default function RecoveryScreen() {
         );
       }
     },
-    [draft, clearDraft, router],
+    [draft, clearDraft, discardDraft, router],
   );
 
   if (!draft) return null;

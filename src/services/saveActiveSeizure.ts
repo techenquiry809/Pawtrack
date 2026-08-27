@@ -55,7 +55,15 @@ export async function saveActiveSeizure(
 
   // Monotonic where available, so a wall-clock jump mid-seizure cannot corrupt
   // a figure a vet may adjust a dose from.
-  const { durationSeconds, confidence } = resolveDuration(draft.mark);
+  //
+  // MEASURED TO draft.endMark, NOT TO NOW. `now` is save time, which is after
+  // the post-seizure questionnaire and the whole recovery screen — on a real
+  // seizure that is minutes of the owner's admin folded into the clinical
+  // duration and stamped 'high'. endMark is the instant they stopped the timer.
+  const { durationSeconds, confidence } = resolveDuration(
+    draft.mark,
+    draft.endMark,
+  );
   const patch = fullPatch(draft, recoveryEndedAt);
 
   let seizureId = draft.seizureId;
@@ -85,7 +93,12 @@ export async function saveActiveSeizure(
         seizureId,
         source: 'recorded',
         fileUri: video.fileUri,
+        thumbUri: video.thumbUri,
+        // The app held the stopwatch, so this timestamp is measured. That is
+        // what separates it from an imported clip whose date the owner typed.
         timestamp: video.timestamp,
+        importedAt: Date.now(),
+        captureConfidence: 'device',
         durationSec: video.durationSec,
         note: '',
       });

@@ -38,7 +38,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -52,6 +52,8 @@ import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import * as medicationRepo from '@/db/medicationRepo';
+import * as videoRepo from '@/db/videoRepo';
+import { GalleryHeader, VideoGallery } from '@/components/VideoGallery';
 import { formatDuration, DAY_MS } from '@/utils/time';
 import {
   buildEvents, dayLabel, groupByDay,
@@ -62,12 +64,21 @@ import {
   type Confidence, type PatternReport,
 } from '@/features/analytics';
 import type {
-  DailyCheckin, MedicationDose, Seizure, Settings,
+  DailyCheckin, GalleryEntry, MedicationDose, Seizure, Settings,
 } from '@/types/domain';
 
 const CONFIDENCE_TONE: Record<Confidence, PillTone> = {
   early: 'neutral', possible: 'amber', repeated: 'teal', strong: 'green',
 };
+
+/**
+ * The two ways to read the same history.
+ *
+ * Timeline answers "what happened, in order". Gallery answers "show me the
+ * one I filmed". They are the same records; a tab rather than a filter,
+ * because the second question is visual and the first is chronological.
+ */
+type Mode = 'timeline' | 'gallery';
 
 type ViewMode = 'seizures' | 'everything';
 type Range = 'all' | '30d' | '90d';
@@ -104,7 +115,27 @@ export default function RecordsScreen() {
   const [doses, setDoses] = useState<(MedicationDose & { medicationName: string })[]>([]);
   const [view, setView] = useState<ViewMode>('seizures');
   const [range, setRange] = useState<Range>('all');
+  const [gallery, setGallery] = useState<GalleryEntry[]>([]);
+  const [mode, setMode] = useState<Mode>('timeline');
   const [loaded, setLoaded] = useState(false);
+
+  /**
+   * "See all" beside Home's video strip arrives with ?mode=gallery.
+   *
+   * A tab screen stays mounted, so a useState initializer would only honour
+   * this on the very first visit. Applying it on focus and then CLEARING the
+   * param is what makes it a one-shot instruction rather than a sticky one —
+   * otherwise the segment would snap back to Gallery every time the owner
+   * returned to this tab, overriding the choice they just made.
+   */
+  const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (modeParam !== 'gallery' && modeParam !== 'timeline') return;
+      setMode(modeParam);
+      router.setParams({ mode: undefined });
+    }, [modeParam, router]),
+  );
 
   const dogId = dog?.id;
 
@@ -114,15 +145,17 @@ export default function RecordsScreen() {
       let cancelled = false;
       (async () => {
         try {
-          const [s, c, d] = await Promise.all([
+          const [s, c, d, g] = await Promise.all([
             seizureRepo.listSeizures(dogId),
             checkinRepo.listCheckins(dogId),
             medicationRepo.listRecentDoses(dogId),
+            videoRepo.listGallery(dogId),
           ]);
           if (!cancelled) {
             setSeizures(s);
             setCheckins(c);
             setDoses(d);
+            setGallery(g);
           }
         } catch (e) {
           console.error('[history] load failed', e);
@@ -159,6 +192,53 @@ export default function RecordsScreen() {
   if (!dog) return null;
 
   const totalSeizures = seizures.length;
+  const importedCount = gallery.filter(
+    (entry) => entry.video.source === 'uploaded',
+  ).length;
+
+  // Rendered into both lists' headers so the control does not jump when the
+  // owner switches — the same pixels, in the same place, in both modes.
+  const modeSwitch = (
+    <View style={styles.filter}>
+      <SegmentedControl<Mode>
+        accessibilityLabel="Choose how to view your records"
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: 'timeline', label: 'Timeline' },
+          { value: 'gallery', label: `Gallery${gallery.length ? ` (${gallery.length})` : ''}` },
+        ]}
+      />
+    </View>
+  );
+
+  if (mode === 'gallery') {
+    return (
+      <View style={styles.screen}>
+        <VideoGallery
+          entries={gallery}
+          loaded={loaded}
+          dogName={dog.name}
+          contentPaddingTop={insets.top + spacing.md}
+          contentPaddingBottom={contentClearance}
+          header={
+            <View>
+              <Text style={styles.screenTitle}>Records</Text>
+              <Muted style={styles.intro}>
+                Every video, filed under the day it happened.
+              </Muted>
+              {modeSwitch}
+              <GalleryHeader
+                total={gallery.length}
+                imported={importedCount}
+                onAdd={() => router.push('/add-video')}
+              />
+            </View>
+          }
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -176,6 +256,7 @@ export default function RecordsScreen() {
             <Muted style={styles.intro}>
               How things have been going for {dog.name}.
             </Muted>
+            {modeSwitch}
 
             <Text style={styles.sectionTitle}>Overview</Text>
             <StatGrid seizures={seizures} report={report} loaded={loaded} />
@@ -412,7 +493,9 @@ function EventRow({
   const time = new Date(event.timestamp).toLocaleTimeString(undefined, {
     hour: 'numeric', minute: '2-digit',
   });
-  const untimed = event.durationConfidence === 'unreliable' || event.durationSec === 0;
+  // Absence of a duration, not low confidence in one — an owner-stated length on
+  // an imported record is 'unreliable' by design and must still be shown.
+  const untimed = event.durationSec === undefined || event.durationSec === 0;
 
   const content = (
     <View style={styles.eventRow}>

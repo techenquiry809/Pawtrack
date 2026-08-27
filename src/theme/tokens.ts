@@ -28,6 +28,49 @@ export const colors = {
   green: '#4C8B58',
   greenTint: '#EAF3EA',
   greenInk: '#2E5A37',
+
+  /**
+   * Text and icons sitting ON a photograph or a saturated fill — a duration
+   * badge over a video frame, a label on the red record button.
+   *
+   * Pure white rather than `card`, and that is the point: the surface
+   * underneath is an arbitrary video frame, so this has to hold contrast
+   * against a bright kitchen floor as well as a dark bedroom. A near-white
+   * tuned to the cream palette would not.
+   */
+  onMedia: '#FFFFFF',
+
+  /**
+   * The letterbox behind a video whose aspect ratio does not fill its frame.
+   *
+   * True black, not `ink`: this is the absence of picture, and every video
+   * player the owner has ever used renders it this way. Tinting it to the
+   * brand palette would read as a rendering fault.
+   */
+  mediaBackdrop: '#000000',
+
+  /**
+   * A frosted panel sitting ON a saturated fill, and its hairline edge.
+   *
+   * Translucent rather than a lighter tint of the fill: the recorder card is a
+   * gradient from `red` to `redDeep`, so any fixed colour would match at one
+   * end of the panel and band at the other. Letting the gradient through is
+   * what keeps the card reading as one surface.
+   */
+  onMediaVeil: 'rgba(255, 255, 255, 0.16)',
+  onMediaVeilEdge: 'rgba(255, 255, 255, 0.32)',
+
+  /**
+   * A dark disc behind a glyph laid over a video frame.
+   *
+   * A white play triangle alone vanishes the moment the poster frame is pale —
+   * and a seizure is as likely to be filmed on a bright kitchen floor as in a
+   * dark bedroom. Same reasoning as the caption scrim in VideoTile.
+   */
+  onMediaScrim: 'rgba(0, 0, 0, 0.45)',
+
+  /** The dim behind a modal sheet. */
+  scrim: 'rgba(32, 41, 58, 0.45)',
 } as const;
 
 /**

@@ -30,6 +30,7 @@ import { DogAvatar } from '@/components/ProfileHeader';
 import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
 import { Icon } from '@/components/Icon';
+import { DatePickerSheet, formatDayKey, parseDayKey } from '@/components/DatePickerSheet';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as dogRepo from '@/db/dogRepo';
 import { breedDisplay } from '@/db/dogRepo';
@@ -41,6 +42,11 @@ const DIAGNOSIS_LABEL: Record<DiagnosisStatus, string> = {
   suspected: 'Suspected',
   diagnosed: 'Diagnosed',
 };
+
+/** A stored value, if it is a real 'YYYY-MM-DD' date. Otherwise ''. */
+function asDayKey(stored: string): string {
+  return parseDayKey(stored) ? stored.trim() : '';
+}
 
 export default function DogProfileScreen() {
   const router = useRouter();
@@ -56,6 +62,8 @@ export default function DogProfileScreen() {
   const [dob, setDob] = useState('');
   const [diagnosisStatus, setDiagnosisStatus] = useState<DiagnosisStatus>('undiagnosed');
   const [firstSeizureDate, setFirstSeizureDate] = useState('');
+  /** Which date sheet is open, if any. One at a time by construction. */
+  const [dateSheet, setDateSheet] = useState<'dob' | 'firstSeizure' | null>(null);
   const [seizureType, setSeizureType] = useState('');
   const [allergies, setAllergies] = useState('');
   const [diet, setDiet] = useState('');
@@ -71,9 +79,15 @@ export default function DogProfileScreen() {
       setSex(dog.sex);
       setAgeYears(dog.ageYears === null ? '' : String(dog.ageYears));
       setWeightKg(dog.weightKg === null ? '' : String(dog.weightKg));
-      setDob(dog.dob);
+      // These two columns were free text before they became calendar fields, so
+      // a stored value is not guaranteed to be a date — this database holds a
+      // ". Do th" in dob from that era. An unparseable value loads as EMPTY
+      // rather than being carried in a hidden state variable: the field already
+      // renders it as "Pick a date", so keeping it would mean saving a value
+      // back that the owner cannot see, edit, or know is there.
+      setDob(asDayKey(dog.dob));
       setDiagnosisStatus(dog.diagnosisStatus);
-      setFirstSeizureDate(dog.firstSeizureDate);
+      setFirstSeizureDate(asDayKey(dog.firstSeizureDate));
       setSeizureType(dog.seizureType);
       setAllergies(dog.allergies);
       setDiet(dog.diet);
@@ -236,7 +250,12 @@ export default function DogProfileScreen() {
           </View>
         </View>
 
-        <Field label="DATE OF BIRTH" value={dob} onChangeText={setDob} placeholder="YYYY-MM-DD" />
+        <DateField
+          label="DATE OF BIRTH"
+          value={dob}
+          placeholder="Pick a date"
+          onPress={() => setDateSheet('dob')}
+        />
       </Card>
 
       {/* --- Seizure history ----------------------------------------- */}
@@ -255,11 +274,11 @@ export default function DogProfileScreen() {
           options={DIAGNOSIS_STATUSES.map((s) => ({ value: s, label: DIAGNOSIS_LABEL[s] }))}
         />
 
-        <Field
+        <DateField
           label="FIRST SEIZURE"
           value={firstSeizureDate}
-          onChangeText={setFirstSeizureDate}
-          placeholder="YYYY-MM-DD"
+          placeholder="Pick a date"
+          onPress={() => setDateSheet('firstSeizure')}
         />
         <Field label="SEIZURE TYPE" value={seizureType} onChangeText={setSeizureType} />
       </Card>
@@ -274,7 +293,76 @@ export default function DogProfileScreen() {
       {error ? <Body style={styles.error}>{error}</Body> : null}
 
       <Button label="Save profile" large loading={saving} onPress={() => void onSave()} />
+
+      {/* Both fields describe something that has already happened, so neither
+          can be in the future — the calendar simply does not offer those days. */}
+      <DatePickerSheet
+        visible={dateSheet === 'dob'}
+        title="Date of birth"
+        value={dob}
+        onPick={(day) => {
+          setDob(day);
+          setDateSheet(null);
+        }}
+        onClear={() => {
+          setDob('');
+          setDateSheet(null);
+        }}
+        onClose={() => setDateSheet(null)}
+      />
+      <DatePickerSheet
+        visible={dateSheet === 'firstSeizure'}
+        title="First seizure"
+        value={firstSeizureDate}
+        onPick={(day) => {
+          setFirstSeizureDate(day);
+          setDateSheet(null);
+        }}
+        onClear={() => {
+          setFirstSeizureDate('');
+          setDateSheet(null);
+        }}
+        onClose={() => setDateSheet(null)}
+      />
     </ScrollView>
+  );
+}
+
+/**
+ * A date, chosen from a calendar rather than typed.
+ *
+ * Typed dates were 'YYYY-MM-DD' free text, which accepted 2026-13-45 and a
+ * birth date in the future without complaint. The calendar cannot offer either,
+ * so the whole class of bad value stops being a validation problem.
+ */
+function DateField({
+  label,
+  value,
+  placeholder,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onPress: () => void;
+}) {
+  const pretty = value ? formatDayKey(value) : '';
+  return (
+    <View>
+      <Muted style={styles.fieldLabel}>{label}</Muted>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${label.toLowerCase()}${pretty ? `, ${pretty}` : ', not set'}`}
+        accessibilityHint="Opens a calendar"
+        style={({ pressed }) => [styles.input, styles.dateInput, pressed && { opacity: 0.7 }]}
+      >
+        <Text style={[styles.dateText, !pretty && styles.datePlaceholder]} numberOfLines={1}>
+          {pretty || placeholder}
+        </Text>
+        <Icon name="calendar" size="md" color={colors.tealDeep} />
+      </Pressable>
+    </View>
   );
 }
 
@@ -351,6 +439,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   inputTall: { minHeight: 76, paddingTop: spacing.md, textAlignVertical: 'top' },
+  dateInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  dateText: { flex: 1, fontSize: fontSize.md, fontWeight: '600', color: colors.ink },
+  datePlaceholder: { color: colors.inkSoft, fontWeight: '500' },
 
   pairRow: { flexDirection: 'row', gap: spacing.md },
 

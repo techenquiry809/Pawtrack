@@ -52,7 +52,6 @@ const MAX_ISLAND_WIDTH = 440;
 const NARROW_SCREEN = 360;
 
 const BASE_ISLAND_HEIGHT = 64;
-const BASE_FAB_HEIGHT = 56;
 
 export type ChromeMetrics = {
   /** Island height, grown for large OS text. */
@@ -62,11 +61,12 @@ export type ChromeMetrics = {
   /** Island width, capped and inset-aware. */
   islandWidth: number;
   islandRadius: number;
-  /** Where the floating Record button sits. */
-  fabBottom: number;
   /**
-   * Bottom padding a scrolling screen needs so its last row clears BOTH the
-   * island and the Record button.
+   * Bottom padding a scrolling screen needs so its last row clears the island.
+   *
+   * It used to also clear a floating Record button that hovered above the bar.
+   * That button now lives INSIDE the island, so every screen gets those ~72pt
+   * of wrongly-reserved padding back.
    */
   contentClearance: number;
 };
@@ -87,14 +87,11 @@ export function useChromeMetrics(): ChromeMetrics {
   const available = width - margin * 2 - insets.left - insets.right;
   const islandWidth = Math.min(Math.max(available, 0), MAX_ISLAND_WIDTH);
 
-  const fabBottom = islandBottom + islandHeight + 14;
-
   return {
     islandHeight,
     islandBottom,
     islandWidth,
     islandRadius: Math.round(islandHeight / 2),
-    fabBottom,
-    contentClearance: fabBottom + BASE_FAB_HEIGHT + 16,
+    contentClearance: islandBottom + islandHeight + 16,
   };
 }

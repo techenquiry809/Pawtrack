@@ -20,9 +20,9 @@ import {
   type SeizureContext,
   type SeizureFinalize,
   type SeizureWithVideos,
-  type Video,
 } from '@/types/domain';
 import { resolveRecoveredDuration, type DurationConfidence } from '@/utils/clock';
+import * as videoRepo from './videoRepo';
 
 const EMPTY_CONTEXT: SeizureContext = {
   food: '', sleep: '', exercise: '', medication: '',
@@ -91,26 +91,6 @@ function rowToSeizure(row: SeizureRow): Seizure {
   };
 }
 
-type VideoRow = {
-  id: string;
-  seizure_id: string;
-  source: string;
-  file_uri: string;
-  timestamp: number;
-  duration_sec: number | null;
-  note: string;
-};
-
-const rowToVideo = (row: VideoRow): Video => ({
-  id: row.id,
-  seizureId: row.seizure_id,
-  source: row.source as Video['source'],
-  fileUri: row.file_uri,
-  timestamp: row.timestamp,
-  durationSec: row.duration_sec,
-  note: row.note,
-});
-
 /* ------------------------------------------------------------------ */
 /* Reads                                                               */
 /* ------------------------------------------------------------------ */
@@ -154,11 +134,11 @@ export async function getSeizure(id: string): Promise<SeizureWithVideos | null> 
     [id],
   );
   if (!row) return null;
-  const videoRows = await db.getAllAsync<VideoRow>(
-    'SELECT * FROM videos WHERE seizure_id = ? ORDER BY timestamp ASC',
-    [id],
-  );
-  return { ...rowToSeizure(row), videos: videoRows.map(rowToVideo) };
+  // The videos table has exactly one owner (videoRepo). This used to query it
+  // directly, which is how the two copies of the column list drifted apart
+  // when migration 8 added imported_at, capture_confidence and thumb_uri.
+  const videos = await videoRepo.listForSeizure(id);
+  return { ...rowToSeizure(row), videos };
 }
 
 /** Used to compute "time since previous seizure" and cluster detection. */
@@ -488,12 +468,28 @@ export async function salvageSeizure(seizure: UnfinishedSeizure): Promise<void> 
  * recoverable, and an abandoned row is also evidence when diagnosing why the
  * app died.
  */
+/**
+ * Soft-delete a seizure the owner chose to throw away.
+ *
+ * ── WHY THE status GUARD IS NOT OPTIONAL ──────────────────────────────
+ *
+ * Only a row still being captured can be discarded. A `complete` row is a
+ * saved health record and this function must never be able to reach it.
+ *
+ * That is not hypothetical: recovery.tsx used to call the store's `cancel`
+ * action on the SUCCESS path, so every seizure was finalized to 'complete' and
+ * then immediately flipped to 'abandoned' one statement later. Since every read
+ * in the app filters on status='complete', every saved seizure disappeared.
+ *
+ * The caller was fixed too, but the guard stays: a destructive UPDATE with no
+ * predicate beyond the id is one careless call site away from doing it again.
+ */
 export async function discardSeizure(seizureId: string): Promise<void> {
   const db = await getDb();
   const now = Date.now();
   await db.runAsync(
     `UPDATE seizures SET status = 'abandoned', last_touched_at = ?, updated_at = ?
-      WHERE id = ?`,
+      WHERE id = ? AND status = 'in_progress'`,
     [now, now, seizureId],
   );
 }
@@ -575,33 +571,15 @@ export async function getEditHistory(
 /* ------------------------------------------------------------------ */
 /* Videos                                                              */
 /* ------------------------------------------------------------------ */
-
-export async function attachVideo(
-  video: Omit<Video, 'id'>,
-): Promise<string> {
-  const db = await getDb();
-  const id = uid();
-  await db.runAsync(
-    `INSERT INTO videos (id, seizure_id, source, file_uri, timestamp, duration_sec, note)
-     VALUES (?,?,?,?,?,?,?)`,
-    [
-      id, video.seizureId, video.source, video.fileUri,
-      video.timestamp, video.durationSec, video.note,
-    ],
-  );
-  return id;
-}
-
 /**
- * Removes the DB row. Deleting the file on disk is the caller's job (see
- * services/videoStorage.ts) so this stays a pure data operation.
+ * MOVED. All video SQL now lives in src/db/videoRepo.ts, which also serves the
+ * gallery's cross-seizure queries. These re-exports keep the existing call
+ * sites (services/saveActiveSeizure.ts, the seizure detail screen) working.
+ *
+ * Note the SHAPE CHANGE on detachVideo: it now returns both the video path and
+ * its poster-frame path, because deleting one without the other leaves a file
+ * on the phone that no screen in the app can reach. Callers should hand the
+ * whole object to videoService.deleteVideoAssets().
  */
-export async function detachVideo(videoId: string): Promise<string | null> {
-  const db = await getDb();
-  const row = await db.getFirstAsync<{ file_uri: string }>(
-    'SELECT file_uri FROM videos WHERE id = ?',
-    [videoId],
-  );
-  await db.runAsync('DELETE FROM videos WHERE id = ?', [videoId]);
-  return row?.file_uri ?? null;
-}
+export { attachVideo, detachVideo, listForSeizure as listVideos } from './videoRepo';
+export type { NewVideoInput, VideoPatch } from './videoRepo';

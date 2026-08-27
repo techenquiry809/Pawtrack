@@ -368,6 +368,49 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 8,
+    name: 'video provenance, thumbnails and notes',
+    up: async (db) => {
+      /**
+       * THE PROBLEM THIS FIXES
+       *
+       * `timestamp` was written as Date.now() at the moment a file entered the
+       * app. For a video recorded live during a seizure that is correct to the
+       * second. For a video the owner filmed last Tuesday on the normal camera
+       * app and imported afterwards it is simply wrong — and nothing on the row
+       * said which of the two it was.
+       *
+       * After this migration:
+       *   timestamp          WHEN THE SEIZURE IN THE VIDEO HAPPENED
+       *   imported_at        when the file entered the app
+       *   capture_confidence how the app knows the timestamp
+       *
+       * capture_confidence is deliberately not defaulted to 'device' for every
+       * existing row. Rows written by the import path never had a real capture
+       * time, so they are backfilled 'unknown' rather than being dressed up as
+       * measured. A gallery that shows an owner-typed date and a stopwatch date
+       * identically is the same class of error as a repaired duration.
+       */
+      await db.execAsync(`
+        ALTER TABLE videos ADD COLUMN imported_at INTEGER NOT NULL DEFAULT 0;
+        UPDATE videos SET imported_at = timestamp WHERE imported_at = 0;
+
+        ALTER TABLE videos
+          ADD COLUMN capture_confidence TEXT NOT NULL DEFAULT 'device';
+        UPDATE videos
+           SET capture_confidence = 'unknown'
+         WHERE source IN ('uploaded', 'legacy');
+
+        -- Poster frame, extracted once at import and stored like any other
+        -- app-owned file: RELATIVE to the document directory, never absolute.
+        ALTER TABLE videos ADD COLUMN thumb_uri TEXT NOT NULL DEFAULT '';
+
+        -- The gallery reads newest-first across a whole dog, not per seizure.
+        CREATE INDEX idx_videos_timestamp ON videos(timestamp DESC);
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {

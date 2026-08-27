@@ -1,5 +1,7 @@
 /**
- * The four-tab main navigation: Home, Check-in, Records, More.
+ * The four-tab main navigation: Home, Check-in, Records, Settings.
+ * The route folder is still `more` — renaming a route file changes its deep
+ * link, and the tab's TITLE is what the owner actually reads.
  *
  * Patterns merged INTO Records — they answered the same question from two
  * tabs, and the summary was separated from the records it came from.
@@ -15,7 +17,6 @@
 import { Redirect, Tabs } from 'expo-router';
 import { useAppStore } from '@/store/appStore';
 import { UnfinishedSeizurePrompt } from '@/components/UnfinishedSeizurePrompt';
-import { RecordSeizureFab } from '@/components/RecordSeizureFab';
 import { FloatingTabBar } from '@/components/FloatingTabBar';
 import { colors } from '@/theme/tokens';
 
@@ -64,14 +65,10 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="more"
           options={{
-            title: 'More',
+            title: 'Settings',
           }}
         />
       </Tabs>
-
-      {/* Floats above the tab bar on every tab except Home, so the timer is
-          always one tap away. Rendered last so it stacks over the tabs. */}
-      <RecordSeizureFab />
     </>
   );
 }

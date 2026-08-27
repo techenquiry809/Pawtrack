@@ -46,6 +46,23 @@ const GLYPHS = {
   checkin: ['create-outline', 'create'],
   records: ['document-text-outline', 'document-text'],
   more: ['ellipsis-horizontal', 'ellipsis-horizontal'],
+  settings: ['settings-outline', 'settings'],
+  // The universal record affordance: a ring with a filled dot. Same glyph
+  // filled or not — a record button that changes shape on focus reads as a
+  // state change, and this one is an action.
+  record: ['radio-button-on', 'radio-button-on'],
+  play: ['play', 'play'],
+  search: ['search-outline', 'search'],
+  clear: ['close-circle', 'close-circle'],
+
+  // The five steps of the energy scale, sad → happy. Ionicons ships only two
+  // face shapes, so the middle three are carried by fill and a neutral dash
+  // rather than by five distinct faces that do not exist.
+  energy1: ['sad', 'sad'],
+  energy2: ['sad-outline', 'sad-outline'],
+  energy3: ['remove', 'remove'],
+  energy4: ['happy-outline', 'happy-outline'],
+  energy5: ['happy', 'happy'],
 
   profile: ['paw-outline', 'paw'],
   emergency: ['medkit-outline', 'medkit'],

@@ -14,6 +14,12 @@
     // Node build tooling, not app code. It is excluded rather than typed
     // because pulling in @types/node changes setTimeout's return type across
     // the whole React Native codebase. Run it with `npx tsx`.
-    "scripts"
+    "scripts",
+    // Same reason. These run on node:test under node's native TypeScript
+    // stripping (`npm test`), never through the Metro bundler, so they import
+    // node: builtins and use explicit .ts specifiers — both of which need
+    // @types/node and allowImportingTsExtensions that the app must not have.
+    // `npm test` executing them is the check that they compile.
+    "**/*.test.ts"
   ]
 }

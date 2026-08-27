@@ -194,8 +194,13 @@ export default function ReportScreen() {
               })}
             </Body>
             <Pill
+              // "Not timed" means no duration exists. An owner-stated length on
+              // an imported record carries 'unreliable' by design, and printing
+              // "Not timed" over it on the document an owner hands their vet
+              // discards a number the app asked them for. The neutral tone still
+              // distinguishes it from a measured figure.
               label={
-                s.durationConfidence === 'unreliable' || s.durationSec === 0
+                s.durationSec === null || s.durationSec === 0
                   ? 'Not timed'
                   : formatDuration(s.durationSec)
               }

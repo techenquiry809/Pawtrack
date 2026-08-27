@@ -42,14 +42,18 @@
  * that code is still here rather than deleted. See `src/theme/glass.ts`.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { GlassView } from 'expo-glass-effect';
+import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { Icon, type IconName } from '@/components/Icon';
 import { colors, fontSize } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
 import { useGlassSupport } from '@/theme/glass';
+import { useActiveDog, useAppStore } from '@/store/appStore';
+import { useActiveSeizure } from '@/store/activeSeizureStore';
 
 /**
  * Ink for inactive tabs — darker than `colors.inkSoft`, and not a taste call.
@@ -66,6 +70,16 @@ import { useGlassSupport } from '@/theme/glass';
  * as the active one — the hierarchy is carried by hue, weight and the pill.
  */
 const CHROME_INK = '#414A5A';
+
+/**
+ * Height of the glyph row inside the island, shared by all five columns.
+ *
+ * 38 rather than the 24pt icon height, so the record disc has room to be a
+ * disc with some authority — it is the emergency action. Small enough that
+ * 38 + gap + label still clears the 64pt island at both ends, which is what
+ * stops `overflow: hidden` slicing the top off the circle.
+ */
+const GLYPH_SLOT = 38;
 
 /** The reference dock's spring, as Animated.spring parameters. */
 const SPRING = { mass: 0.1, stiffness: 150, damping: 12, useNativeDriver: true };
@@ -106,7 +120,7 @@ const ICONS: Record<string, IconName> = {
   index: 'home',
   checkin: 'checkin',
   history: 'records',
-  more: 'more',
+  more: 'settings',
 };
 
 export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) {
@@ -202,33 +216,35 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
           )}
 
           <View style={styles.row}>
-            {state.routes.map((route, index) => {
-              const { options } = descriptors[route.key] ?? {};
-              const label =
-                typeof options?.title === 'string' ? options.title : route.name;
-              const focused = state.index === index;
+            {withRecordSlot(
+              state.routes.map((route, index) => {
+                const { options } = descriptors[route.key] ?? {};
+                const label =
+                  typeof options?.title === 'string' ? options.title : route.name;
+                const focused = state.index === index;
 
-              return (
-                <TabButton
-                  key={route.key}
-                  label={label}
-                  icon={ICONS[route.name] ?? 'more'}
-                  focused={focused}
-                  glass={glass}
-                  distance={Math.abs(state.index - index)}
-                  onPress={() => {
-                    const event = navigation.emit({
-                      type: 'tabPress',
-                      target: route.key,
-                      canPreventDefault: true,
-                    });
-                    if (!focused && !event.defaultPrevented) {
-                      navigation.navigate(route.name);
-                    }
-                  }}
-                />
-              );
-            })}
+                return (
+                  <TabButton
+                    key={route.key}
+                    label={label}
+                    icon={ICONS[route.name] ?? 'more'}
+                    focused={focused}
+                    glass={glass}
+                    distance={Math.abs(state.index - index)}
+                    onPress={() => {
+                      const event = navigation.emit({
+                        type: 'tabPress',
+                        target: route.key,
+                        canPreventDefault: true,
+                      });
+                      if (!focused && !event.defaultPrevented) {
+                        navigation.navigate(route.name);
+                      }
+                    }}
+                  />
+                );
+              }),
+            )}
           </View>
         </View>
       </View>
@@ -237,6 +253,83 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
 }
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * Where the Record button sits among the four tabs.
+ *
+ * Dead centre, between Check-in and Records. It is not a tab and never becomes
+ * one — it navigates out of the tab stack entirely — but it belongs in this bar
+ * because starting the timer is the one action in this app that is
+ * time-critical, and it must be in the SAME PLACE on every screen. It used to
+ * float above the bar as a pill, where it covered whatever was underneath it:
+ * on the check-in form it sat squarely over the Water row.
+ */
+const RECORD_SLOT = 2;
+
+function withRecordSlot(tabs: ReactNode[]): ReactNode[] {
+  return [
+    ...tabs.slice(0, RECORD_SLOT),
+    <RecordTabButton key="record" />,
+    ...tabs.slice(RECORD_SLOT),
+  ];
+}
+
+/**
+ * The Record button, as a bar item.
+ *
+ * ── HOW AN OWNER KNOWS WHAT IT DOES ───────────────────────────────────
+ *
+ * Three signals, because one is not enough on a control this consequential:
+ * the app's red — reserved for seizures and used nowhere else in this bar —
+ * a filled record ring, and the word "Record". The label is not decoration;
+ * a red dot alone is a shape people recognise only once they already know the
+ * app.
+ *
+ * ── ONE TAP, NO CONFIRMATION ──────────────────────────────────────────
+ *
+ * Same rule as the Home button: a confirmation step costs seconds during an
+ * emergency and buys nothing. An accidental tap is recoverable — the live
+ * screen offers Discard, and a discarded record is soft-deleted, not lost.
+ */
+function RecordTabButton() {
+  const router = useRouter();
+  const dog = useActiveDog();
+  const settings = useAppStore((s) => s.settings);
+  const startSeizure = useActiveSeizure((s) => s.start);
+  const press = useRef(new Animated.Value(1)).current;
+
+  const onPress = () => {
+    if (!dog) return;
+    if (settings.hapticsEnabled) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    }
+    startSeizure(dog.id);
+    router.push('/seizure/live');
+  };
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => Animated.spring(press, { toValue: 0.9, ...SPRING }).start()}
+      onPressOut={() => Animated.spring(press, { toValue: 1, ...SPRING }).start()}
+      accessibilityRole="button"
+      accessibilityLabel="Record seizure"
+      accessibilityHint="Starts the seizure timer immediately"
+      // The whole slot is the target, so the 42pt disc below is only what the
+      // eye sees — the finger gets the full height and width of the column.
+      style={styles.tab}
+    >
+      <View style={styles.glyphSlot}>
+        <Animated.View style={[styles.recordDisc, { transform: [{ scale: press }] }]}>
+          <Icon name="record" size="md" color={colors.onMedia} filled />
+        </Animated.View>
+      </View>
+      <Text style={styles.recordLabel} numberOfLines={1}>
+        Record
+      </Text>
+    </Pressable>
+  );
+}
 
 function TabButton({
   label,
@@ -290,16 +383,18 @@ function TabButton({
         pointerEvents="none"
       />
 
-      <Animated.View
-        style={{ transform: [{ scale: Animated.multiply(scale, press) }, { translateY }] }}
-      >
-        <Icon
-          name={icon}
-          size="lg"
-          filled={focused}
-          color={focused ? colors.tealDeep : CHROME_INK}
-        />
-      </Animated.View>
+      <View style={styles.glyphSlot}>
+        <Animated.View
+          style={{ transform: [{ scale: Animated.multiply(scale, press) }, { translateY }] }}
+        >
+          <Icon
+            name={icon}
+            size="lg"
+            filled={focused}
+            color={focused ? colors.tealDeep : CHROME_INK}
+          />
+        </Animated.View>
+      </View>
 
       <Text
         style={[styles.label, focused && styles.labelActive]}
@@ -387,6 +482,35 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(47,126,134,0.14)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(47,126,134,0.20)',
+  },
+  /**
+   * One glyph height for every column, record included.
+   *
+   * Without it the record disc — taller than a 24pt icon — made its own column
+   * taller than the rest, which did two visible things: it pushed "Record"
+   * below the other four labels, and it grew past the island, whose
+   * `overflow: hidden` sliced a flat edge off the top of the circle.
+   */
+  glyphSlot: { height: GLYPH_SLOT, alignItems: 'center', justifyContent: 'center' },
+  recordDisc: {
+    width: GLYPH_SLOT,
+    height: GLYPH_SLOT,
+    borderRadius: GLYPH_SLOT / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.red,
+    // A lift of its own, so the disc reads as sitting ON the bar rather than
+    // being a coloured hole cut into it.
+    shadowColor: colors.redDeep,
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  recordLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '800',
+    color: colors.redDeep,
   },
   label: {
     fontSize: fontSize.xs,

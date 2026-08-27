@@ -1,5 +1,7 @@
 /**
- * More — the settings hub.
+ * Settings — the settings hub.
+ *
+ * The route is still `more` for deep-link stability; only the label changed.
  *
  * ── WHY THIS IS NOT A LIST OF LINKS ───────────────────────────────────
  *
@@ -90,7 +92,7 @@ export default function MoreScreen() {
         { paddingTop: insets.top + spacing.md, paddingBottom: contentClearance },
       ]}
     >
-      <Title>More</Title>
+      <Title>Settings</Title>
 
       {/* --- Dog ---------------------------------------------------- */}
       <SectionTitle>Dog</SectionTitle>

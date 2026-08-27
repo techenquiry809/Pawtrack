@@ -46,6 +46,7 @@ import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tok
 import { goBackOrHome } from '@/utils/nav';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as dogRepo from '@/db/dogRepo';
+import { Icon } from '@/components/Icon';
 import {
   BREED_LIST,
   BREED_SOURCE,
@@ -188,6 +189,44 @@ export default function BreedPickerScreen() {
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <View>
+            {/* ── The search field ──────────────────────────────────────
+                Now at the TOP, with a glyph, because a bare bordered box two
+                sections down does not read as search — owners scrolled past it
+                to hunt the alphabetical list by hand. It is still NOT
+                autofocused: raising the keyboard on mount hides the pinned
+                answers, which are the right answer for a rescue or a cross. */}
+            <View style={styles.searchWrap}>
+              <Icon name="search" size="md" color={colors.inkSoft} />
+              <TextInput
+                style={styles.search}
+                value={query}
+                onChangeText={(next) => {
+                  setQuery(next);
+                  listRef.current?.scrollToOffset({ offset: 0, animated: false });
+                }}
+                placeholder={`Search ${BREED_LIST.length} breeds`}
+                placeholderTextColor={colors.inkSoft}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="search"
+                accessibilityLabel="Search breeds"
+              />
+              {searching ? (
+                <Pressable
+                  onPress={() => {
+                    setQuery('');
+                    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                  hitSlop={10}
+                  style={({ pressed }) => pressed && styles.pressed}
+                >
+                  <Icon name="clear" size="md" color={colors.inkSoft} />
+                </Pressable>
+              ) : null}
+            </View>
+
             {/* Pinned answers. Not buried under 235 alphabetical entries. */}
             {!searching && (
               <>
@@ -204,23 +243,10 @@ export default function BreedPickerScreen() {
             )}
 
             <Text style={styles.sectionLabel}>
-              {searching ? 'RESULTS' : 'ALL BREEDS'}
+              {searching
+                ? `${results.length} RESULT${results.length === 1 ? '' : 'S'}`
+                : 'ALL BREEDS'}
             </Text>
-            <TextInput
-              style={styles.search}
-              value={query}
-              onChangeText={(next) => {
-                setQuery(next);
-                listRef.current?.scrollToOffset({ offset: 0, animated: false });
-              }}
-              placeholder="Search breeds"
-              placeholderTextColor={colors.inkSoft}
-              autoCorrect={false}
-              autoCapitalize="none"
-              // No autoFocus: see the layout note at the top of this file.
-              accessibilityLabel="Search breeds"
-              clearButtonMode="while-editing"
-            />
           </View>
         }
         ListEmptyComponent={
@@ -298,16 +324,24 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
 
-  search: {
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.pill,
     backgroundColor: colors.card,
     paddingHorizontal: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
+    marginBottom: spacing.md,
+  },
+  search: {
+    flex: 1,
+    minHeight: MIN_TOUCH_TARGET,
     fontSize: fontSize.md,
+    fontWeight: '600',
     color: colors.ink,
-    marginBottom: spacing.sm,
   },
 
   row: {
