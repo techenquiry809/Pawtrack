@@ -30,11 +30,14 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  Body, Card, Disclaimer, Heading, Muted, NavRow, Pill, SectionTitle, Title,
+  Body, Button, Card, Disclaimer, Heading, Muted, NavRow, Pill, SectionTitle, Title,
 } from '@/components/ui';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
 import { useActiveDog, useAppStore } from '@/store/appStore';
+import { pendingWriteCount, useAuthStore } from '@/store/authStore';
+import { syncNow } from '@/services/sync/worker';
+import { resetAuthPrompt } from '@/services/authPrompt';
 import { breedDisplay } from '@/db/dogRepo';
 import { DogAvatar } from '@/components/ProfileHeader';
 import { Icon } from '@/components/Icon';
@@ -56,7 +59,67 @@ export default function MoreScreen() {
 
   const [counts, setCounts] = useState<{ seizures: number; checkins: number } | null>(null);
 
+  const authStatus = useAuthStore((s) => s.status);
+  const userEmail = useAuthStore((s) => s.user?.email ?? null);
+  const [pending, setPending] = useState(0);
+
+  const signOut = useAuthStore((s) => s.signOut);
+  const refreshDogs = useAppStore((s) => s.refreshDogs);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  const refreshPending = useCallback(async () => {
+    setPending(await pendingWriteCount());
+  }, []);
+
+  const onSyncFirst = async () => {
+    setSigningOut(true);
+    try {
+      await syncNow('manual');
+      await refreshPending();
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const onSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await signOut();
+      // Put the sign-in offer back on the table — the next person to pick up
+      // this phone may well be a different one.
+      await resetAuthPrompt();
+      await refreshDogs();
+      setConfirmSignOut(false);
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const accountLabel = authStatus === 'signed-in' ? 'Account' : 'Sign in';
+  const accountDetail =
+    authStatus === 'signed-in'
+      ? pending === 0
+        ? (userEmail ?? 'Backed up')
+        : `${pending} record${pending === 1 ? '' : 's'} waiting to back up`
+      : 'Back up your records and use them on another device';
+
   const dogId = dog?.id;
+
+  // Refreshed on focus rather than on an interval: the number only changes as
+  // a result of the owner's own writes or a sync, and both of those have
+  // finished by the time this screen is looked at again.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void pendingWriteCount().then((n) => {
+        if (!cancelled) setPending(n);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -143,6 +206,76 @@ export default function MoreScreen() {
           last
         />
       </Card>
+
+      {/* --- Account and sync --------------------------------------- */}
+      {/*
+        Placed after the dog's own settings, not before them. An account is
+        backup and a second device; it is not what this app is for, and putting
+        it at the top would imply the records need one to be safe. They do not.
+      */}
+      <SectionTitle>Account</SectionTitle>
+      <Card style={styles.flush}>
+        <NavRow
+          icon="records"
+          label={accountLabel}
+          detail={accountDetail}
+          onPress={() => router.push('/account')}
+          last
+        />
+      </Card>
+
+      {/*
+        Sign out lives here as well as on the Account screen, because it is the
+        one thing people come to Settings looking for and expect to find
+        without another tap.
+
+        It is NOT one tap though. Signing out on an offline-first app can strip
+        access to records this phone has not uploaded yet, so the confirm step
+        exists to say how many — and to offer syncing them first, which is what
+        the owner almost always actually wants.
+      */}
+      {authStatus === 'signed-in' && (
+        <Card style={confirmSignOut ? styles.warnCard : undefined}>
+          {confirmSignOut ? (
+            <>
+              <Heading>Sign out?</Heading>
+              <Body style={styles.signOutBody}>
+                {pending === 0
+                  ? 'Everything is backed up. Your records stay on this phone and in your account.'
+                  : `${pending === 1 ? '1 record has' : `${pending} records have`} not been backed up yet. They stay on this phone and will upload next time you sign in.`}
+              </Body>
+              {pending > 0 && (
+                <Button
+                  label="Sync now first"
+                  onPress={() => void onSyncFirst()}
+                  loading={signingOut}
+                />
+              )}
+              <Button
+                label="Sign out"
+                variant="danger"
+                onPress={() => void onSignOut()}
+                disabled={signingOut}
+              />
+              <Button
+                label="Cancel"
+                variant="ghost"
+                onPress={() => setConfirmSignOut(false)}
+                disabled={signingOut}
+              />
+            </>
+          ) : (
+            <Button
+              label="Sign out"
+              variant="ghost"
+              onPress={() => {
+                void refreshPending();
+                setConfirmSignOut(true);
+              }}
+            />
+          )}
+        </Card>
+      )}
 
       {/* --- Dog switcher, only when it does something -------------- */}
       {dogs.length > 1 && (
@@ -244,22 +377,41 @@ export default function MoreScreen() {
         )}
       </Card>
 
-      {/* --- Your data ---------------------------------------------- */}
+      {/* --- Your data ----------------------------------------------
+        This card used to say "there is no account and no server, so nothing is
+        uploaded". That was true before sync existed and is now false in one
+        direction and still true in another, which is exactly the kind of copy
+        that has to be kept honest: an owner decides whether losing this phone
+        matters based on what it says.
+      */}
       <SectionTitle>Your data</SectionTitle>
       <Card>
-        <Body>
-          Everything stays on this phone. There is no account and no server, so
-          nothing is uploaded and nothing is shared unless you export it yourself.
-        </Body>
+        {authStatus === 'signed-in' ? (
+          <Body>
+            Your records are backed up to your account and appear on every
+            device you sign in on. Seizure videos are the exception — those
+            stay on the phone that filmed them and are never uploaded.
+          </Body>
+        ) : (
+          <Body>
+            Everything stays on this phone. Nothing is uploaded and nothing is
+            shared unless you export it yourself.
+          </Body>
+        )}
+
         {counts && (
           <Muted style={{ marginTop: spacing.sm }}>
             {counts.seizures} seizure record{counts.seizures === 1 ? '' : 's'} ·{' '}
             {counts.checkins} check-in{counts.checkins === 1 ? '' : 's'}.
           </Muted>
         )}
+
         <Muted style={{ marginTop: spacing.sm }}>
-          Because there is no cloud backup yet, losing this phone loses these
-          records. A vet report export is the next thing being built.
+          {authStatus === 'signed-in'
+            ? pending === 0
+              ? 'Everything here has been backed up. Losing this phone would still lose its seizure videos, because those never leave the device.'
+              : `${pending === 1 ? '1 record has' : `${pending} records have`} not been backed up yet — they upload on the next sync.`
+            : 'Without an account there is no backup, so losing this phone loses these records.'}
         </Muted>
       </Card>
 
@@ -363,8 +515,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
-  countLabel: { fontSize: fontSize.xs, color: colors.inkSoft },
+  countLabel: { fontSize: fontSize.xs, color: colors.inkSoft, fontFamily: fontFamily.regular },
 
   dogRow: {
     flexDirection: 'row',
@@ -373,7 +526,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     paddingHorizontal: spacing.md,
   },
-  dogRowLabel: { fontWeight: '600' },
+  dogRowLabel: { fontWeight: '600', fontFamily: fontFamily.semibold },
 
   settingIntro: { marginBottom: spacing.sm },
   settingRow: {
@@ -382,12 +535,14 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
   },
-  settingLabel: { fontWeight: '600' },
+  settingLabel: { fontWeight: '600', fontFamily: fontFamily.semibold },
 
   stepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   stepBtn: {
     width: 36,
     height: 36,
+    // A CIRCLE: half of 36. Not a step on the radius scale — snapping
+    // this to a token turns the circle into a rounded square.
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
@@ -396,7 +551,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   stepBtnDisabled: { opacity: 0.35 },
-  stepBtnLabel: { fontSize: 18, fontWeight: '700', color: colors.ink, lineHeight: 22 },
+  stepBtnLabel: { fontSize: 18, fontWeight: '700', color: colors.ink, lineHeight: 22, fontFamily: fontFamily.bold },
   stepValue: {
     minWidth: 58,
     textAlign: 'center',
@@ -404,13 +559,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
 
   resetRow: {
     minHeight: 44,
     justifyContent: 'center',
     marginTop: spacing.sm,
-    borderRadius: radius.sm,
+    borderRadius: radius.card,
   },
-  resetLabel: { color: colors.tealDeep, fontWeight: '700' },
+  /** Amber, not red: signing out is reversible and loses nothing. */
+  warnCard: { backgroundColor: colors.amberTint, gap: spacing.sm },
+  signOutBody: { lineHeight: 21 },
+  resetLabel: { color: colors.tealDeep, fontWeight: '700', fontFamily: fontFamily.bold },
 });

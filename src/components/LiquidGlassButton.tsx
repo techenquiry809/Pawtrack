@@ -45,7 +45,7 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { Icon, type IconName } from '@/components/Icon';
-import { colors, fontSize, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET } from '@/theme/tokens';
 
 /** Press feedback: fast enough to feel instant, slow enough to be seen. */
 const PRESS_MS = 150;
@@ -172,5 +172,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: fontSize.md,
     letterSpacing: 0.2,
+    fontFamily: fontFamily.bold
   },
 });

@@ -34,7 +34,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View,
+  Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -49,7 +49,7 @@ import {
   type SingleField,
   type TextField,
 } from '@/components/ObservationFields';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 import { useSeizureTimer } from '@/hooks/useSeizureTimer';
@@ -368,6 +368,27 @@ export default function LiveSeizureScreen() {
           ) : null}
         </Pressable>
 
+        {/* --- Quick note -------------------------------------------
+            Collapsed by default and deliberately BELOW the video button.
+
+            This screen does one thing, and the pinned "Seizure ended" control
+            is the only thing that must be reachable without thought. A text
+            field open by default would put a keyboard over a running timer.
+
+            But the observations are otherwise collected two screens later, on
+            the post-seizure form — by which point they are being recalled
+            rather than watched. An owner who wants to type "paddling, left
+            side" while they can still see it should not have to remember it
+            for four minutes.
+
+            Writes through setField('notes'), which the store already debounces
+            into the same durable row as every other field. Nothing here is
+            held only in component state. */}
+        <QuickNote
+          value={draft.notes}
+          onChange={(text) => setField('notes', text)}
+        />
+
         {/* --- Observations ------------------------------------------ */}
         <SectionRule label="Quick observations — all optional" />
         <IctalFields value={value} on={handlers} />
@@ -499,7 +520,103 @@ function ThresholdTrack({
   );
 }
 
+/**
+ * A note the owner can add while the seizure is happening.
+ *
+ * Starts as a single low-emphasis row. Tapping it reveals the field, and the
+ * row then shows a preview of what was typed so the state is legible without
+ * opening it again.
+ *
+ * `blurOnSubmit` with a Done key rather than a multiline free-for-all: the
+ * point is a phrase, not a paragraph, and the keyboard has to be dismissible
+ * one-handed while holding a phone over a convulsing dog.
+ */
+function QuickNote({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <Pressable
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={value ? 'Edit your note' : 'Add a note'}
+        accessibilityHint="Saved with this seizure record"
+        style={({ pressed }) => [styles.noteRow, pressed && { opacity: 0.85 }]}
+      >
+        <Icon name="edit" size="md" color={colors.inkSoft} />
+        <Text style={styles.noteRowLabel} numberOfLines={1}>
+          {value.trim() ? value.trim() : 'Add a note'}
+        </Text>
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={styles.noteOpen}>
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        placeholder="What are you seeing? e.g. paddling, left side"
+        placeholderTextColor={colors.inkSoft}
+        style={styles.noteInput}
+        autoFocus
+        multiline
+        maxLength={1000}
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={() => setOpen(false)}
+        accessibilityLabel="Note for this seizure"
+      />
+      <Pressable
+        onPress={() => setOpen(false)}
+        accessibilityRole="button"
+        accessibilityLabel="Done writing the note"
+        hitSlop={10}
+        style={styles.noteDone}
+      >
+        <Text style={styles.noteDoneLabel}>Done</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  noteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: MIN_TOUCH_TARGET,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.card,
+  },
+  noteRowLabel: { flex: 1, fontSize: fontSize.base, color: colors.inkSoft, fontFamily: fontFamily.regular },
+  noteOpen: {
+    marginTop: spacing.sm,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.teal,
+    backgroundColor: colors.card,
+    padding: spacing.md,
+  },
+  noteInput: {
+    minHeight: 64,
+    fontSize: fontSize.base,
+    color: colors.ink,
+    textAlignVertical: 'top',
+    fontFamily: fontFamily.regular
+  },
+  noteDone: { alignSelf: 'flex-end', paddingTop: spacing.sm },
+  noteDoneLabel: { fontSize: fontSize.base, fontWeight: '800', color: colors.teal, fontFamily: fontFamily.extrabold },
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
   flex: { flex: 1 },
@@ -517,7 +634,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line,
   },
-  closeIcon: { fontSize: 18, color: colors.ink },
+  closeIcon: { fontSize: 18, color: colors.ink, fontFamily: fontFamily.regular },
 
   /**
    * The recording surface. It carries the threshold state as a fill, so the
@@ -527,7 +644,7 @@ const styles = StyleSheet.create({
   timerCard: {
     marginTop: spacing.sm,
     padding: spacing.md,
-    borderRadius: radius.lg,
+    borderRadius: radius.card,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
@@ -543,7 +660,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET + 16,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: radius.md,
+    borderRadius: radius.card,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
@@ -551,21 +668,24 @@ const styles = StyleSheet.create({
   videoGlyph: {
     width: 40,
     height: 40,
+    // A CIRCLE: half of 40. Not a step on the radius scale — snapping
+    // this to a token turns the circle into a rounded square.
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.redTint,
   },
-  videoBtnLabel: { fontSize: fontSize.md, fontWeight: '800', color: colors.ink },
-  videoBtnSub: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1 },
+  videoBtnLabel: { fontSize: fontSize.md, fontWeight: '800', color: colors.ink, fontFamily: fontFamily.extrabold },
+  videoBtnSub: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1, fontFamily: fontFamily.regular },
 
   timerWrap: { alignItems: 'center', marginTop: spacing.lg },
   timer: {
-    fontSize: 68,
+    fontSize: fontSize.timerLg,
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'], // stops the digits jittering each second
     letterSpacing: -1,
+    fontFamily: fontFamily.bold
   },
   timerCaption: { marginTop: 4, textAlign: 'center' },
 
@@ -604,16 +724,16 @@ const styles = StyleSheet.create({
   banner: {
     flexDirection: 'row',
     gap: spacing.sm,
-    borderRadius: radius.md,
+    borderRadius: radius.card,
     padding: spacing.md,
     marginTop: spacing.md,
     alignItems: 'flex-start',
   },
-  bannerIcon: { fontSize: 16 },
+  bannerIcon: { fontSize: fontSize.md, fontFamily: fontFamily.regular },
   bannerWarn: { backgroundColor: colors.amberTint },
-  bannerWarnText: { color: colors.amberInk, flex: 1, fontWeight: '600' },
+  bannerWarnText: { color: colors.amberInk, flex: 1, fontWeight: '600', fontFamily: fontFamily.semibold },
   bannerCrit: { backgroundColor: colors.red },
-  bannerCritText: { color: '#fff', flex: 1, fontWeight: '700' },
+  bannerCritText: { color: '#fff', flex: 1, fontWeight: '700', fontFamily: fontFamily.bold },
 
   centreNote: { textAlign: 'center', marginTop: spacing.sm },
   safetyNote: { textAlign: 'center', marginTop: spacing.xl },

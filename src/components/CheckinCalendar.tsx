@@ -37,7 +37,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Body, Button, Heading, Muted, Pill } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { localDayKey } from '@/utils/time';
 import type { DailyCheckin } from '@/types/domain';
 
@@ -59,15 +59,18 @@ export function buildMonthGrid(
   month: number,
   records: Map<string, DailyCheckin>,
   todayKey: string,
-): { key: string; day: number | null; status: DayStatus }[] {
+  videoDays: Set<string>,
+): { key: string; day: number | null; status: DayStatus; hasVideo: boolean }[] {
   const first = new Date(year, month, 1);
   // getDay() is Sunday-first; shift so Monday is 0.
   const lead = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const cells: { key: string; day: number | null; status: DayStatus }[] = [];
+  const cells: {
+    key: string; day: number | null; status: DayStatus; hasVideo: boolean;
+  }[] = [];
   for (let i = 0; i < lead; i += 1) {
-    cells.push({ key: `blank_${i}`, day: null, status: 'blank' });
+    cells.push({ key: `blank_${i}`, day: null, status: 'blank', hasVideo: false });
   }
   for (let d = 1; d <= daysInMonth; d += 1) {
     const key = keyFor(year, month, d);
@@ -77,16 +80,20 @@ export function buildMonthGrid(
     else if (record?.backfilled) status = 'backfilled';
     else if (record) status = 'done';
     else status = 'missed';
-    cells.push({ key, day: d, status });
+    cells.push({ key, day: d, status, hasVideo: videoDays.has(key) });
   }
   return cells;
 }
+
+/** Stable identity, so an omitted prop does not re-run the grid memo. */
+const EMPTY_DAYS: Set<string> = new Set();
 
 export function CheckinCalendar({
   visible,
   onClose,
   onPickDate,
   records,
+  videoDays,
   dogName,
 }: {
   visible: boolean;
@@ -94,6 +101,16 @@ export function CheckinCalendar({
   onPickDate: (dayKey: string) => void;
   /** Every check-in, keyed by its local day. */
   records: Map<string, DailyCheckin>;
+  /**
+   * Local days that have at least one seizure video.
+   *
+   * Kept separate from `records` rather than folded into the check-in status,
+   * because they answer different questions. The day mark says whether the
+   * OWNER wrote anything down; the video dot says whether there is FOOTAGE.
+   * A day can easily have one and not the other — a seizure filmed at 3am on a
+   * day nobody got round to a check-in is exactly the day a vet asks about.
+   */
+  videoDays?: Set<string>;
   dogName: string;
 }) {
   const todayKey = localDayKey();
@@ -103,9 +120,10 @@ export function CheckinCalendar({
 
   const [selected, setSelected] = useState<string | null>(null);
 
+  const videoSet = videoDays ?? EMPTY_DAYS;
   const cells = useMemo(
-    () => buildMonthGrid(year, month, records, todayKey),
-    [year, month, records, todayKey],
+    () => buildMonthGrid(year, month, records, todayKey, videoSet),
+    [year, month, records, todayKey, videoSet],
   );
 
   const selectedRecord = selected ? records.get(selected) : undefined;
@@ -200,6 +218,7 @@ export function CheckinCalendar({
                   key={cell.key}
                   day={cell.day}
                   status={cell.status}
+                  hasVideo={cell.hasVideo}
                   isToday={cell.key === todayKey}
                   isSelected={cell.key === selected}
                   onPress={() => {
@@ -228,6 +247,9 @@ export function CheckinCalendar({
             <LegendItem status="done" label="Recorded" />
             <LegendItem status="backfilled" label="Filled in later" />
             <LegendItem status="missed" label="Missed" />
+            {/* Only shown when there is footage to find, so the legend does
+                not explain a marker the owner will never see. */}
+            {videoSet.size > 0 && <LegendItem status="video" label="Has video" />}
           </View>
 
           <Body style={styles.summary}>
@@ -245,12 +267,14 @@ export function CheckinCalendar({
 function DayCell({
   day,
   status,
+  hasVideo,
   isToday,
   isSelected,
   onPress,
 }: {
   day: number;
   status: DayStatus;
+  hasVideo: boolean;
   isToday: boolean;
   isSelected: boolean;
   onPress: () => void;
@@ -270,7 +294,7 @@ function DayCell({
       onPress={onPress}
       disabled={inert}
       accessibilityRole="button"
-      accessibilityLabel={`${day}, ${label}`}
+      accessibilityLabel={`${day}, ${label}${hasVideo ? ', has a seizure video' : ''}`}
       accessibilityState={{ disabled: inert }}
       style={({ pressed }) => [styles.cell, pressed && !inert && styles.pressed]}
     >
@@ -294,7 +318,15 @@ function DayCell({
           {day}
         </Text>
       </View>
-      {status === 'missed' && <View style={styles.missedDot} />}
+      {/*
+        Both markers share one row so they cannot collide. A day can be a
+        missed check-in AND hold footage, and that combination is the one worth
+        seeing: something happened, and nobody wrote the day up.
+      */}
+      <View style={styles.markers}>
+        {status === 'missed' && <View style={styles.missedDot} />}
+        {hasVideo && <View style={styles.videoDot} />}
+      </View>
     </Pressable>
   );
 }
@@ -308,6 +340,17 @@ function DayCell({
  *
  * Sleep is the one field that can genuinely be absent, so it says "not
  * recorded" rather than inventing a zero.
+ *
+ * ── EXCEPT ON A mood_only DAY ─────────────────────────────────────────
+ *
+ * The paragraph above holds only when the owner actually opened the form. A
+ * row created by tapping a face on Home carries schema defaults for everything
+ * except energy, and printing "Appetite: Normal" there would report a default
+ * back as an observation — the owner would read their own answer where they
+ * had given none, and could repeat it to a vet.
+ *
+ * So those days show the mood and say plainly that nothing else was recorded,
+ * with the form one tap away.
  */
 function DaySummary({
   dayKey,
@@ -339,19 +382,37 @@ function DaySummary({
         {record.backfilled && <Pill label="Filled in later" tone="teal" />}
       </View>
 
-      <View style={styles.summaryGrid}>
-        <SummaryFact
-          label="Sleep"
-          value={record.sleepHrs === null ? 'Not recorded' : `${record.sleepHrs} h`}
-        />
-        <SummaryFact label="Appetite" value={sentence(record.appetite)} />
-        <SummaryFact label="Water" value={sentence(record.water)} />
-        <SummaryFact label="Energy" value={`${record.energy} / 5`} />
-        <SummaryFact label="Stress" value={`${record.stress} / 5`} />
-        <SummaryFact label="Medication" value={record.medOnTime ? 'On time' : 'Not on time'} />
-      </View>
+      {record.moodOnly ? (
+        <>
+          <View style={styles.summaryGrid}>
+            <SummaryFact label="Energy" value={`${record.energy} / 5`} />
+          </View>
+          <SummaryFact
+            label="The rest of this day"
+            value="Not recorded — only the mood was set"
+            wide
+          />
+        </>
+      ) : (
+        <>
+          <View style={styles.summaryGrid}>
+            <SummaryFact
+              label="Sleep"
+              value={record.sleepHrs === null ? 'Not recorded' : `${record.sleepHrs} h`}
+            />
+            <SummaryFact label="Appetite" value={sentence(record.appetite)} />
+            <SummaryFact label="Water" value={sentence(record.water)} />
+            <SummaryFact label="Energy" value={`${record.energy} / 5`} />
+            <SummaryFact label="Stress" value={`${record.stress} / 5`} />
+            <SummaryFact
+              label="Medication"
+              value={record.medOnTime ? 'On time' : 'Not on time'}
+            />
+          </View>
 
-      <SummaryFact label="Vomiting or diarrhea" value={gi} wide />
+          <SummaryFact label="Vomiting or diarrhea" value={gi} wide />
+        </>
+      )}
 
       {record.unusual.trim().length > 0 && (
         <View style={styles.summaryNote}>
@@ -399,7 +460,9 @@ function SummaryFact({
   );
 }
 
-function LegendItem({ status, label }: { status: DayStatus; label: string }) {
+function LegendItem({
+  status, label,
+}: { status: DayStatus | 'video'; label: string }) {
   return (
     <View style={styles.legendItem}>
       <View
@@ -408,6 +471,9 @@ function LegendItem({ status, label }: { status: DayStatus; label: string }) {
           status === 'done' && styles.dayDone,
           status === 'backfilled' && styles.dayBackfilled,
           status === 'missed' && styles.dayMissed,
+          // The dot is drawn at its real size inside the swatch box, so the
+          // legend shows the marker the calendar actually draws.
+          status === 'video' && styles.legendVideo,
         ]}
       />
       <Muted style={styles.legendLabel}>{label}</Muted>
@@ -424,11 +490,11 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.sheet,
     padding: spacing.lg,
   },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  close: { fontSize: 18, color: colors.inkSoft, paddingHorizontal: 4 },
+  close: { fontSize: 18, color: colors.inkSoft, paddingHorizontal: 4, fontFamily: fontFamily.regular },
   intro: { marginTop: 4, marginBottom: spacing.md },
   pressed: { opacity: 0.65 },
   disabled: { opacity: 0.3 },
@@ -444,10 +510,10 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 18,
+    borderRadius: radius.control,
   },
-  monthArrow: { fontSize: 24, color: colors.ink, lineHeight: 28 },
-  monthLabel: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink },
+  monthArrow: { fontSize: 24, color: colors.ink, lineHeight: 28, fontFamily: fontFamily.regular },
+  monthLabel: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
 
   weekRow: { flexDirection: 'row' },
   weekday: {
@@ -457,6 +523,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.inkSoft,
     marginBottom: 4,
+    fontFamily: fontFamily.bold
   },
 
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
@@ -469,6 +536,8 @@ const styles = StyleSheet.create({
   dayMark: {
     width: 32,
     height: 32,
+    // A CIRCLE: half of 32. Not a step on the radius scale — snapping
+    // this to a token turns the circle into a rounded square.
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
@@ -480,16 +549,36 @@ const styles = StyleSheet.create({
   dayMissed: { borderColor: colors.amber, borderStyle: 'dashed' },
   dayToday: { borderColor: colors.ink },
   daySelected: { borderColor: colors.tealDeep, borderWidth: 2.5 },
-  dayText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.ink },
+  dayText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.ink, fontFamily: fontFamily.semibold },
   dayTextOn: { color: '#fff' },
   dayTextInert: { color: colors.line },
-  missedDot: {
+  /** Holds the day's markers in a row so two can coexist without overlapping. */
+  markers: {
     position: 'absolute',
     bottom: 3,
+    flexDirection: 'row',
+    gap: 3,
+    alignItems: 'center',
+  },
+  missedDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2, // Half of 4 — a circle, not a scale step.
+    backgroundColor: colors.amber,
+  },
+  /**
+   * Footage exists for this day.
+   *
+   * Teal, the app's own accent, rather than the red used for seizures: this
+   * dot means "there is a video here", not "this was a bad day". A red dot on
+   * a calendar of otherwise neutral marks reads as an alarm, and an owner
+   * scanning for a clip to show their vet is not in an emergency.
+   */
+  videoDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.amber,
+    backgroundColor: colors.teal,
   },
 
   summaryPanel: {
@@ -504,7 +593,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  summaryDate: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink, flexShrink: 1 },
+  summaryDate: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink, flexShrink: 1, fontFamily: fontFamily.bold },
   summaryGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.sm },
   summaryFact: { width: '33.33%', paddingRight: spacing.sm, marginBottom: spacing.sm },
   summaryFactWide: { width: '100%', paddingRight: 0 },
@@ -513,12 +602,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
     color: colors.inkSoft,
+    fontFamily: fontFamily.bold
   },
   summaryValue: {
     fontSize: fontSize.base,
     fontWeight: '600',
     color: colors.ink,
     marginTop: 1,
+    fontFamily: fontFamily.semibold
   },
   summaryNote: { marginTop: spacing.sm },
   editRow: {
@@ -528,7 +619,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     marginTop: spacing.xs,
   },
-  editLabel: { color: colors.tealDeep, fontWeight: '700' },
+  editLabel: { color: colors.tealDeep, fontWeight: '700', fontFamily: fontFamily.bold },
 
   legend: {
     flexDirection: 'row',
@@ -540,6 +631,13 @@ const styles = StyleSheet.create({
     borderTopColor: colors.line,
   },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendVideo: {
+    backgroundColor: colors.teal,
+    borderColor: colors.teal,
+    // Shrunk to the dot's own footprint rather than filling the 14pt swatch:
+    // a teal square would read as a third day-status, which it is not.
+    transform: [{ scale: 0.45 }],
+  },
   legendSwatch: {
     width: 14,
     height: 14,
@@ -547,7 +645,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'transparent',
   },
-  legendLabel: { fontSize: fontSize.xs },
+  legendLabel: { fontSize: fontSize.xs, fontFamily: fontFamily.regular },
 
   summary: { marginTop: spacing.md, color: colors.inkSoft },
   doneBtn: { marginTop: spacing.md, minHeight: MIN_TOUCH_TARGET },

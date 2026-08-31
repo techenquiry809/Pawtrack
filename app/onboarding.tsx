@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Body, Button, Card, Disclaimer, Heading, Muted, Title } from '@/components/ui';
-import { colors, fontSize, radius, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { Icon } from '@/components/Icon';
 import * as dogRepo from '@/db/dogRepo';
 import { useAppStore } from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
+import { lastSyncedAt } from '@/services/sync/worker';
 import { BREED_LIST, BREED_SOURCE, SPECIAL_BREEDS, type BreedOption } from '@/constants/breeds';
 
 /**
@@ -33,6 +35,51 @@ export default function OnboardingScreen() {
   const [age, setAge] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Whether the account's existing dogs have arrived yet.
+   *
+   * ── THE DUPLICATE-DOG PROBLEM ─────────────────────────────────────────
+   *
+   * A signed-in owner opening the app on a new phone reaches this screen the
+   * moment the dog list looks empty — which it is, until the first pull
+   * finishes. If they type "Lucy" in that window they create a SECOND Lucy
+   * with a different id, and the account now holds two dogs that are one
+   * animal, with the seizure history split between them.
+   *
+   * Merging two dogs after the fact is not something this app can do safely,
+   * so the cheap prevention is the right one: while a session exists and the
+   * first sync has not completed, the button waits. A signed-OUT owner is
+   * unaffected — there is nothing to arrive.
+   */
+  const authStatus = useAuthStore((s) => s.status);
+  const [waitingForSync, setWaitingForSync] = useState(
+    () => useAuthStore.getState().status === 'signed-in' && lastSyncedAt() === null,
+  );
+
+  useEffect(() => {
+    if (authStatus !== 'signed-in') {
+      setWaitingForSync(false);
+      return;
+    }
+    if (lastSyncedAt() !== null) {
+      setWaitingForSync(false);
+      return;
+    }
+
+    setWaitingForSync(true);
+    const started = Date.now();
+    const timer = setInterval(() => {
+      // Give up waiting after 15 seconds. An owner with no signal must still
+      // be able to create their dog — a first-run screen that never unblocks
+      // is a worse failure than a duplicate we can warn about later.
+      if (lastSyncedAt() !== null || Date.now() - started > 15_000) {
+        setWaitingForSync(false);
+        clearInterval(timer);
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [authStatus]);
 
   // The picker hands its choice back through the route, so this screen never
   // needs to hold a copy of the breed list.
@@ -153,12 +200,19 @@ export default function OnboardingScreen() {
 
         {error ? <Body style={styles.error}>{error}</Body> : null}
 
+        {waitingForSync ? (
+          <Muted style={{ marginBottom: spacing.sm }}>
+            Checking your account for dogs you have already added…
+          </Muted>
+        ) : null}
+
         <Button
           label="Create profile"
           large
           loading={saving}
-          // Disabled until there is a name — the one genuinely required field.
-          disabled={name.trim().length === 0}
+          // Disabled until there is a name — the one genuinely required field —
+          // and, for a signed-in owner, until the first pull has had its say.
+          disabled={name.trim().length === 0 || waitingForSync}
           onPress={onSubmit}
         />
       </Card>
@@ -170,19 +224,21 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
   logo: {
-    width: 56, height: 56, borderRadius: 16, backgroundColor: colors.teal,
+    width: 56, height: 56, borderRadius: radius.card, backgroundColor: colors.teal,
     alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md,
   },
-  logoMark: { fontSize: 26 },
-  intro: { fontSize: fontSize.base, lineHeight: 22, marginVertical: spacing.md },
+  logoMark: { fontSize: fontSize.xl, fontFamily: fontFamily.regular },
+  intro: { fontSize: fontSize.base, lineHeight: 22, marginVertical: spacing.md, fontFamily: fontFamily.regular },
   label: {
     fontSize: fontSize.xs, fontWeight: '700', letterSpacing: 0.8,
     marginTop: spacing.md, marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   input: {
-    borderWidth: 1, borderColor: colors.line, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.line, borderRadius: radius.field,
     paddingHorizontal: spacing.md, minHeight: 48, fontSize: fontSize.md,
     color: colors.ink, backgroundColor: colors.card,
+    fontFamily: fontFamily.regular
   },
   error: { color: colors.redDeep, marginBottom: spacing.sm },
   flexOne: { flex: 1 },
@@ -192,11 +248,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.control,
     paddingHorizontal: spacing.md,
     minHeight: 48,
     backgroundColor: colors.card,
   },
-  breedValue: { fontSize: fontSize.md, color: colors.ink, fontWeight: '600' },
-  breedDesc: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1 },
+  breedValue: { fontSize: fontSize.md, color: colors.ink, fontWeight: '600', fontFamily: fontFamily.semibold },
+  breedDesc: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1, fontFamily: fontFamily.regular },
 });

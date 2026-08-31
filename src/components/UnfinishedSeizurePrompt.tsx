@@ -20,7 +20,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppState, Modal, Pressable, StyleSheet, View } from 'react-native';
 
 import { Body, Heading, Muted } from '@/components/ui';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import * as seizureRepo from '@/db/seizureRepo';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 import { useAppStore } from '@/store/appStore';
@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.card,
     padding: spacing.lg,
     gap: spacing.sm,
   },
@@ -156,13 +156,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
-    borderRadius: radius.sm,
+    borderRadius: radius.control,
   },
   primary: { backgroundColor: colors.teal, alignItems: 'center' },
-  primaryLabel: { color: '#fff', fontWeight: '700', fontSize: fontSize.md },
+  primaryLabel: { color: '#fff', fontWeight: '700', fontSize: fontSize.md, fontFamily: fontFamily.bold },
   primaryHint: { color: '#fff', opacity: 0.85, marginTop: 2, textAlign: 'center' },
   ghost: { borderWidth: 1, borderColor: colors.line },
   pressed: { opacity: 0.75 },
-  label: { fontWeight: '600' },
+  label: { fontWeight: '600', fontFamily: fontFamily.semibold },
   hint: { marginTop: 2 },
 });

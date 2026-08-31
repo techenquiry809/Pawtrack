@@ -270,9 +270,45 @@ export const CAPTURE_CONFIDENCE_LABEL: Record<CaptureConfidence, string> = {
 export const VideoSchema = z.object({
   id: z.string(),
   seizureId: z.string(),
+  /**
+   * Denormalised from the parent seizure.
+   *
+   * A video used to reach its dog only by joining through seizures. It needs
+   * the column directly now: a tombstone cascade and a server-side row policy
+   * both have to address this row without a join, and it is the key a future
+   * multi-caregiver join table would use.
+   */
+  dogId: z.string(),
   source: z.enum(VIDEO_SOURCES),
-  /** Path inside the app's document directory. Bytes never go in the DB. */
+  /**
+   * Path inside the app's document directory, or '' when the bytes are not on
+   * THIS phone. Read `isLocal` rather than testing this for emptiness.
+   *
+   * Lives in the local-only `video_files` table, never in the synced row —
+   * a file:// path from another device resolves to nothing here.
+   */
   fileUri: z.string(),
+  /**
+   * Whether this device actually holds the recording.
+   *
+   * ── WHY A VIDEO CAN EXIST WITHOUT ITS FILE ────────────────────────────
+   *
+   * The row is clinical data and syncs: "a recording exists for this seizure"
+   * is meaningful in a vet report on any device. The bytes are deliberately
+   * local and never leave the phone that filmed them.
+   *
+   * So on a second device this is false, and the gallery shows a designed
+   * state naming the phone that has it — not a broken tile, and not a hidden
+   * one. Everything else about the seizure is fully present; only the frames
+   * are missing.
+   */
+  isLocal: z.boolean(),
+  /**
+   * Which physical phone recorded this, or null for anything filmed before
+   * the app tracked devices. Joins to the device registry so a tile can say
+   * "Recorded on Sam's iPhone" instead of printing a UUID at the owner.
+   */
+  originDeviceId: z.string().nullable(),
   /**
    * WHEN THE SEIZURE IN THIS VIDEO HAPPENED — not when the file was added.
    * Read `captureConfidence` before showing this to anyone.
@@ -283,12 +319,30 @@ export const VideoSchema = z.object({
   captureConfidence: z.enum(CAPTURE_CONFIDENCES),
   /**
    * Poster frame, relative to the document directory like every other
-   * app-owned file. '' when extraction failed — the gallery must render a
-   * placeholder rather than assume this is present.
+   * app-owned file. '' when extraction failed OR when the video is not on this
+   * device — the gallery must render a placeholder rather than assume this is
+   * present. Local-only, for the same reason as fileUri.
    */
   thumbUri: z.string(),
   durationSec: z.number().nullable(),
   note: z.string().max(1000),
+
+  /**
+   * What the owner saw before, during and after the seizure in THIS clip.
+   *
+   * Free text, and deliberately not the seizure's chip vocabularies. These
+   * exist mainly for an IMPORTED video, where there was never a live capture
+   * and the seizure row is thin — what the owner can still describe is what
+   * the footage shows ("circling for a minute before this starts", "the clip
+   * ends while she is still paddling"). Forcing that into fixed options would
+   * lose the detail that makes it worth recording.
+   *
+   * Notes for a vet to read, never values to count — they are not fed to
+   * analytics.
+   */
+  preNote: z.string().max(1000),
+  ictalNote: z.string().max(1000),
+  postNote: z.string().max(1000),
 });
 export type Video = z.infer<typeof VideoSchema>;
 
@@ -472,6 +526,15 @@ export const DailyCheckinSchema = z.object({
   unusual: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
+  /**
+   * True when this row exists only because the owner tapped a mood face on
+   * Home and never filled in the rest of the day.
+   *
+   * `energy` is real. `appetite`, `water`, `stress` and `gi` are schema
+   * defaults nobody stood behind, so anything measuring those must skip these
+   * rows — see stressAssociation in src/features/analytics.
+   */
+  moodOnly: z.boolean(),
 });
 export type DailyCheckin = z.infer<typeof DailyCheckinSchema>;
 
@@ -508,7 +571,15 @@ export type Settings = z.infer<typeof SettingsSchema>;
 export const DEFAULT_SETTINGS: Settings = {
   thresholdWarnMin: 3,
   thresholdCritMin: 5,
-  clusterWindowHrs: 4,
+  // 24 hours, not 4. "Two or more seizures in 24 hours" is the threshold most
+  // veterinary practices use for cluster seizures and the one owners are told
+  // to watch for; a 4-hour window silently missed the overnight pair that
+  // matters most. Still a SETTING — practices differ, and so do dogs.
+  //
+  // NOTE this changes the default for NEW installs only. A phone that already
+  // stored 4 keeps it until the owner changes it in More, because silently
+  // rewriting a saved clinical threshold is not ours to do.
+  clusterWindowHrs: 24,
   clusterCount: 2,
   hapticsEnabled: true,
 };

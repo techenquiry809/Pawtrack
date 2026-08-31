@@ -7,6 +7,7 @@
  */
 
 import * as SQLite from 'expo-sqlite';
+import * as Crypto from 'expo-crypto';
 import { runMigrations } from './migrations';
 
 const DB_NAME = 'paws-journal.db';
@@ -101,11 +102,35 @@ export function fromSqlJson<T>(value: string | null, fallback: T): T {
   }
 }
 
-/** Collision-resistant enough for a local-only, single-device dataset. */
+/**
+ * A fresh row id.
+ *
+ * ── WHY THIS CHANGED ──────────────────────────────────────────────────
+ *
+ * This used to be `'id_' + Math.random().toString(36).slice(2, 10) +
+ * Date.now().toString(36)` — about 40 bits of Math.random entropy plus a
+ * timestamp. That is fine for one phone writing to one file, and not fine the
+ * moment two devices on one account generate ids independently and push them
+ * into the same table. A collision there does not throw; the second row
+ * silently overwrites the first, and the first is somebody's seizure record.
+ *
+ * UUIDv4 from a real CSPRNG, via expo-crypto. 122 random bits.
+ *
+ * ── WHY THE COLUMN TYPE DOES NOT CHANGE ───────────────────────────────
+ *
+ * Ids stay TEXT on both sides. Every `id_…` value already on a phone stays
+ * valid and migrates untouched, no foreign key in the app needs rewriting, and
+ * Postgres accepts both shapes in the same `text primary key`. Switching the
+ * column to `uuid` would mean rewriting historical ids, which is a data
+ * migration on live health records bought for nothing.
+ *
+ * ── WHY THE CLIENT GENERATES IDS AT ALL ───────────────────────────────
+ *
+ * Non-negotiable for offline-first: a seizure row is inserted on the first tap,
+ * has videos attached to it, and is referenced by an edit log — all while the
+ * phone may have no signal and the server has never heard of it. The row must
+ * be referenceable before it is ever pushed.
+ */
 export function uid(): string {
-  return (
-    'id_' +
-    Math.random().toString(36).slice(2, 10) +
-    Date.now().toString(36)
-  );
+  return Crypto.randomUUID();
 }

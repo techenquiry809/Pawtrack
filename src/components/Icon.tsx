@@ -77,6 +77,12 @@ const GLYPHS = {
   chevron: ['chevron-forward', 'chevron-forward'],
   clock: ['time-outline', 'time'],
   empty: ['file-tray-outline', 'file-tray'],
+  // A seizure video whose bytes live on the phone that recorded it. The glyph
+  // has to read as "another device", not as "broken" — see VideoTile.
+  device: ['phone-portrait-outline', 'phone-portrait'],
+  // Points the opposite way to `chevron`, which marks "go deeper" on nav rows.
+  // The two must not be the same glyph or the direction stops meaning anything.
+  back: ['chevron-back', 'chevron-back'],
 } as const;
 
 export type IconName = keyof typeof GLYPHS;

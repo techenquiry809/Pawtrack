@@ -19,8 +19,9 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Card, Heading, Muted, Title } from '@/components/ui';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
+import { BackButton } from '@/components/BackButton';
 import { useActiveDog } from '@/store/appStore';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as reminders from '@/services/medicationReminders';
@@ -200,6 +201,7 @@ export default function MedicationEditScreen() {
       ]}
       keyboardShouldPersistTaps="handled"
     >
+      <BackButton />
       <Title>{isEdit ? 'Edit medication' : 'Add medication'}</Title>
       <Muted style={styles.intro}>
         Enter exactly what {dog.name}&apos;s veterinarian prescribed. Only the
@@ -238,6 +240,7 @@ export default function MedicationEditScreen() {
                   onPress={() => onRemoveTime(t)}
                   accessibilityRole="button"
                   accessibilityLabel={`Remove the ${t.timeHHMM} reminder`}
+                  hitSlop={{ top: 4, bottom: 4 }}
                   style={({ pressed }) => [styles.removeBtn, pressed && styles.pressed]}
                 >
                   <Text style={styles.removeLabel}>Remove</Text>
@@ -255,6 +258,7 @@ export default function MedicationEditScreen() {
               onPress={() => onAddTime(q)}
               accessibilityRole="button"
               accessibilityLabel={`Add a reminder at ${q}`}
+              hitSlop={{ top: 4, bottom: 4 }}
               style={({ pressed }) => [styles.quickChip, pressed && styles.pressed]}
             >
               <Text style={styles.quickChipLabel}>{q}</Text>
@@ -346,16 +350,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginTop: spacing.md,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   input: {
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.field,
     paddingHorizontal: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
     fontSize: fontSize.md,
     color: colors.ink,
     backgroundColor: colors.bg,
+    fontFamily: fontFamily.regular
   },
 
   timeList: { marginTop: spacing.md },
@@ -373,9 +379,12 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontVariant: ['tabular-nums'],
     minWidth: 56,
+    fontFamily: fontFamily.bold
   },
+  // 40pt painted, below MIN_TOUCH_TARGET. The Pressable carries hitSlop to
+  // restore a 48pt tap area — growing the box instead would break the row.
   removeBtn: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 6 },
-  removeLabel: { color: colors.redDeep, fontWeight: '700', fontSize: fontSize.sm },
+  removeLabel: { color: colors.redDeep, fontWeight: '700', fontSize: fontSize.sm, fontFamily: fontFamily.bold },
 
   quickLabel: {
     fontSize: fontSize.xs,
@@ -383,13 +392,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginTop: spacing.lg,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   quickChip: {
     minHeight: 40,
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
+    borderRadius: radius.control,
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.bg,
@@ -399,6 +409,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
 
   customRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },

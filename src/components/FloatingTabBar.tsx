@@ -49,7 +49,7 @@ import { GlassView } from 'expo-glass-effect';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Icon, type IconName } from '@/components/Icon';
-import { colors, fontSize } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
 import { useGlassSupport } from '@/theme/glass';
 import { useActiveDog, useAppStore } from '@/store/appStore';
@@ -82,7 +82,26 @@ const CHROME_INK = '#414A5A';
 const GLYPH_SLOT = 38;
 
 /** The reference dock's spring, as Animated.spring parameters. */
-const SPRING = { mass: 0.1, stiffness: 150, damping: 12, useNativeDriver: true };
+/**
+ * Damping dropped from 12 to 10 so the spring settles with a small overshoot
+ * instead of easing flat into place. That tiny bounce is most of what reads as
+ * "cheerful" in motion — but it stays small on purpose, because this bar is
+ * also how somebody reaches the record button during a seizure.
+ */
+const SPRING = { mass: 0.1, stiffness: 150, damping: 10, useNativeDriver: true };
+
+/**
+ * The press ring, matching the shared Button's port of shadcn's
+ * `outline-2 outline-offset-2 outline-ring/70`.
+ *
+ * The bar already had the dock's scale spring; this adds the ring that goes
+ * with it on the reference button, so a tab and a Button answer a finger the
+ * same way. It hugs the active pill's geometry rather than the whole column —
+ * the column is 1/5th of the screen and a ring around all of it would read as
+ * a selection box, not a glow.
+ */
+const RING_WIDTH = 2;
+const RING_OFFSET = 2;
 
 /** Magnification falloff by distance from the active tab, in tab positions. */
 const SCALE_BY_DISTANCE = [1.18, 1.06, 1.0];
@@ -297,6 +316,7 @@ function RecordTabButton() {
   const settings = useAppStore((s) => s.settings);
   const startSeizure = useActiveSeizure((s) => s.start);
   const press = useRef(new Animated.Value(1)).current;
+  const glow = useRef(new Animated.Value(0)).current;
 
   const onPress = () => {
     if (!dog) return;
@@ -310,8 +330,14 @@ function RecordTabButton() {
   return (
     <Pressable
       onPress={onPress}
-      onPressIn={() => Animated.spring(press, { toValue: 0.9, ...SPRING }).start()}
-      onPressOut={() => Animated.spring(press, { toValue: 1, ...SPRING }).start()}
+      onPressIn={() => {
+        Animated.spring(press, { toValue: 0.9, ...SPRING }).start();
+        Animated.spring(glow, { toValue: 1, ...SPRING }).start();
+      }}
+      onPressOut={() => {
+        Animated.spring(press, { toValue: 1, ...SPRING }).start();
+        Animated.spring(glow, { toValue: 0, ...SPRING }).start();
+      }}
       accessibilityRole="button"
       accessibilityLabel="Record seizure"
       accessibilityHint="Starts the seizure timer immediately"
@@ -323,6 +349,14 @@ function RecordTabButton() {
         <Animated.View style={[styles.recordDisc, { transform: [{ scale: press }] }]}>
           <Icon name="record" size="md" color={colors.onMedia} filled />
         </Animated.View>
+        {/* Ring rides the disc's own scale so it stays concentric while pressed. */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.recordRing,
+            { opacity: Animated.multiply(glow, 0.7), transform: [{ scale: press }] },
+          ]}
+        />
       </View>
       <Text style={styles.recordLabel} numberOfLines={1}>
         Record
@@ -351,6 +385,7 @@ function TabButton({
   const scale = useRef(new Animated.Value(scaleFor(distance))).current;
   const lift = useRef(new Animated.Value(focused ? 1 : 0)).current;
   const press = useRef(new Animated.Value(1)).current;
+  const glow = useRef(new Animated.Value(0)).current;
 
   // Re-run the falloff whenever the active tab moves, so the whole row
   // resettles the way a dock does when the cursor travels across it.
@@ -360,39 +395,63 @@ function TabButton({
   }, [distance, focused, scale, lift]);
 
   const translateY = lift.interpolate({ inputRange: [0, 1], outputRange: [0, -3] });
-  const pillOpacity = lift.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const chipOpacity = lift.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
 
   return (
     <Pressable
       onPress={onPress}
-      onPressIn={() =>
-        Animated.spring(press, { toValue: 0.9, ...SPRING }).start()
-      }
-      onPressOut={() => Animated.spring(press, { toValue: 1, ...SPRING }).start()}
+      onPressIn={() => {
+        Animated.spring(press, { toValue: 0.9, ...SPRING }).start();
+        Animated.spring(glow, { toValue: 1, ...SPRING }).start();
+      }}
+      onPressOut={() => {
+        Animated.spring(press, { toValue: 1, ...SPRING }).start();
+        Animated.spring(glow, { toValue: 0, ...SPRING }).start();
+      }}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
       accessibilityLabel={label}
       style={styles.tab}
     >
-      {/* Active pill sits behind the content and fades with the same spring.
-          On glass it has to be translucent: the opaque tint that works over a
-          blur reads as a plastic chip set into the material, and it would
-          block the transparency at the one spot the eye goes first. */}
-      <Animated.View
-        style={[styles.pill, glass ? styles.pillGlass : styles.pillBlur, { opacity: pillOpacity }]}
-        pointerEvents="none"
-      />
-
       <View style={styles.glyphSlot}>
-        <Animated.View
-          style={{ transform: [{ scale: Animated.multiply(scale, press) }, { translateY }] }}
-        >
-          <Icon
-            name={icon}
-            size="lg"
-            filled={focused}
-            color={focused ? colors.tealDeep : CHROME_INK}
+        {/*
+          The chip travels with the lift, so it stays centred under the glyph
+          instead of the icon sliding out of its own highlight when a tab
+          becomes active.
+        */}
+        <Animated.View style={[styles.chipWrap, { transform: [{ translateY }] }]}>
+          {/* Active chip. On glass it has to be translucent: the opaque tint
+              that works over a blur reads as a plastic chip set into the
+              material, and it would block the transparency at the one spot
+              the eye goes first. */}
+          <Animated.View
+            style={[
+              styles.chip,
+              glass ? styles.chipGlass : styles.chipBlur,
+              { opacity: chipOpacity },
+            ]}
+            pointerEvents="none"
           />
+
+          {/* Press ring, tracing the chip so it reads as the same object lighting up. */}
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.chipRing, { opacity: Animated.multiply(glow, 0.7) }]}
+          />
+
+          {/* Only the glyph scales. The chip holding it stays put, so the
+              magnification reads as the icon growing inside its slot rather
+              than the whole highlight inflating. */}
+          <Animated.View
+            style={{ transform: [{ scale: Animated.multiply(scale, press) }] }}
+          >
+            <Icon
+              name={icon}
+              size="lg"
+              filled={focused}
+              color={focused ? colors.tealDeep : CHROME_INK}
+            />
+          </Animated.View>
         </Animated.View>
       </View>
 
@@ -458,7 +517,9 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(255,255,255,0.72)',
   },
-  row: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  // A little inset so "Home" and "Settings" are not touching the island's
+  // curved ends — at the extremes the corner radius eats into the text's box.
+  row: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xs },
   tab: {
     flex: 1,
     height: '100%',
@@ -466,22 +527,52 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 2,
   },
-  pill: {
-    position: 'absolute',
-    top: 6,
-    bottom: 6,
-    left: 8,
-    right: 8,
-    borderRadius: 22,
+  /**
+   * The active chip, sized to the GLYPH and nothing else.
+   *
+   * It used to span the whole column (`left: 8, right: 8`) and try to contain
+   * the label too. That could not work: the labels are different lengths, so
+   * "Check-in" and "Settings" overflowed a box tuned for "Home" and the chip's
+   * bottom edge cut straight through the word. Sizing it to the icon removes
+   * the dependency on text width entirely — the longest label in any language
+   * can no longer break it.
+   *
+   * radius.control is the same pill the Buttons use, so the chip and a Button
+   * are recognisably the same shape language.
+   */
+  chipWrap: {
+    width: GLYPH_SLOT,
+    height: GLYPH_SLOT,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  pillBlur: { backgroundColor: colors.tealTint },
-  pillGlass: {
+  chip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: radius.control,
+  },
+  chipBlur: { backgroundColor: colors.tealTint },
+  chipGlass: {
     // Same hue as tealTint, carried as alpha so the glass still shows through,
     // with a rim to hold its shape — a low-alpha fill alone loses its edge
     // against a busy background.
     backgroundColor: 'rgba(47,126,134,0.14)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(47,126,134,0.20)',
+  },
+  /** Concentric with the chip: pushed out by RING_OFFSET, radius grown to match. */
+  chipRing: {
+    position: 'absolute',
+    top: -(RING_OFFSET + RING_WIDTH),
+    left: -(RING_OFFSET + RING_WIDTH),
+    right: -(RING_OFFSET + RING_WIDTH),
+    bottom: -(RING_OFFSET + RING_WIDTH),
+    borderRadius: radius.control + RING_OFFSET,
+    borderWidth: RING_WIDTH,
+    borderColor: colors.tealDeep,
   },
   /**
    * One glyph height for every column, record included.
@@ -492,6 +583,15 @@ const styles = StyleSheet.create({
    * `overflow: hidden` sliced a flat edge off the top of the circle.
    */
   glyphSlot: { height: GLYPH_SLOT, alignItems: 'center', justifyContent: 'center' },
+  /** Ring for the record disc — circular, and red so it stays the disc's own colour. */
+  recordRing: {
+    position: 'absolute',
+    width: GLYPH_SLOT + RING_OFFSET * 2 + RING_WIDTH * 2,
+    height: GLYPH_SLOT + RING_OFFSET * 2 + RING_WIDTH * 2,
+    borderRadius: (GLYPH_SLOT + RING_OFFSET * 2 + RING_WIDTH * 2) / 2,
+    borderWidth: RING_WIDTH,
+    borderColor: colors.red,
+  },
   recordDisc: {
     width: GLYPH_SLOT,
     height: GLYPH_SLOT,
@@ -511,11 +611,13 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: '800',
     color: colors.redDeep,
+    fontFamily: fontFamily.extrabold
   },
   label: {
     fontSize: fontSize.xs,
     fontWeight: '600',
     color: CHROME_INK,
+    fontFamily: fontFamily.semibold
   },
-  labelActive: { color: colors.tealDeep, fontWeight: '700' },
+  labelActive: { color: colors.tealDeep, fontWeight: '700', fontFamily: fontFamily.bold },
 });

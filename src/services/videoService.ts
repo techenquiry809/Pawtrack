@@ -24,6 +24,7 @@
  */
 
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { CameraView } from 'expo-camera';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -248,6 +249,62 @@ export async function importVideos(
     } catch (e) {
       // One unreadable file in a multi-select must not lose the others.
       console.error('[video] could not import one of the selected videos', e);
+    }
+  }
+  return imported;
+}
+
+/**
+ * The same import, from Files rather than Photos.
+ *
+ * ── WHY BOTH ROUTES HAVE TO EXIST ─────────────────────────────────────
+ *
+ * They read different storage, and an owner cannot tell which one their clip
+ * is in from the app. A video a vet emailed back, one pulled off a home
+ * camera, one saved from WhatsApp or synced from Drive lives in Files and is
+ * INVISIBLE to the photo library picker — the owner taps "add a video", sees a
+ * gallery that does not contain their seizure footage, and concludes the app
+ * cannot take it.
+ *
+ * ── NO PERMISSION PROMPT, AND THAT IS CORRECT ─────────────────────────
+ *
+ * The document picker is a system UI that hands back only what the owner
+ * explicitly chose, so there is no library-wide permission to request. Asking
+ * for one would be asking for access this route never needs.
+ *
+ * `copyToCacheDirectory` is required: the picker returns a security-scoped
+ * URL that stops resolving once its dialog closes, so reading it later fails
+ * with a file-not-found on a file that is really there.
+ */
+export async function importVideosFromFiles(
+  options: { multiple?: boolean } = {},
+): Promise<CapturedVideo[]> {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: 'video/*',
+    multiple: options.multiple ?? true,
+    copyToCacheDirectory: true,
+  });
+
+  if (result.canceled) return [];
+
+  const imported: CapturedVideo[] = [];
+  for (const asset of result.assets) {
+    try {
+      const fileUri = await persist(asset.uri);
+      const thumbUri = await generateThumbnail(fileUri);
+      imported.push({
+        fileUri,
+        thumbUri,
+        // Same honesty as the photo-library route: a file carries no
+        // dependable capture date, so none is invented.
+        capturedAt: null,
+        // The document picker reports size, never duration. Left null rather
+        // than guessed; the gallery already renders "length unknown".
+        durationSec: null,
+      });
+    } catch (e) {
+      // One unreadable file in a multi-select must not lose the others.
+      console.error('[video] could not import one of the chosen files', e);
     }
   }
   return imported;

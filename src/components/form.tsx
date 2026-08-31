@@ -35,7 +35,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 
 /* ------------------------------------------------------------------ */
 /* Screen header                                                       */
@@ -285,6 +285,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: colors.teal,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   screenTitle: {
     fontSize: fontSize.display,
@@ -292,12 +293,14 @@ const styles = StyleSheet.create({
     color: colors.ink,
     letterSpacing: -0.6,
     lineHeight: fontSize.display * 1.12,
+    fontFamily: fontFamily.bold
   },
   subtitle: {
     fontSize: fontSize.base,
     color: colors.inkSoft,
     marginTop: spacing.sm,
     lineHeight: fontSize.base * 1.45,
+    fontFamily: fontFamily.regular
   },
 
   /* section rule */
@@ -314,6 +317,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.3,
     textTransform: 'uppercase',
     color: colors.inkSoft,
+    fontFamily: fontFamily.extrabold
   },
   sectionRuleLine: { flex: 1, height: 1, backgroundColor: colors.line },
   countBadge: {
@@ -330,6 +334,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.tealDeep,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.extrabold
   },
 
   /* question */
@@ -340,19 +345,21 @@ const styles = StyleSheet.create({
     color: colors.ink,
     letterSpacing: -0.2,
     lineHeight: fontSize.md * 1.35,
+    fontFamily: fontFamily.bold
   },
   questionHint: {
     fontSize: fontSize.sm,
     color: colors.inkSoft,
     marginTop: 5,
     lineHeight: fontSize.sm * 1.45,
+    fontFamily: fontFamily.regular
   },
 
   /* input */
   input: {
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.field,
     backgroundColor: colors.card,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
@@ -362,6 +369,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginTop: spacing.md,
     textAlignVertical: 'top',
+    fontFamily: fontFamily.regular
   },
   inputTall: { minHeight: 104 },
 
@@ -381,8 +389,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.inkSoft,
     letterSpacing: 0.2,
+    fontFamily: fontFamily.semibold
   },
-  trailLabelNow: { color: colors.tealDeep, fontWeight: '800' },
+  trailLabelNow: { color: colors.tealDeep, fontWeight: '800', fontFamily: fontFamily.extrabold },
 
   /* action bar */
   actionBar: {
@@ -404,5 +413,6 @@ const styles = StyleSheet.create({
     fontSize: fontSize.base,
     fontWeight: '700',
     color: colors.tealDeep,
+    fontFamily: fontFamily.bold
   },
 });

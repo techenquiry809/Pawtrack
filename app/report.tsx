@@ -20,17 +20,28 @@
  * cannot tell it was a guess.
  */
 
-import { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Alert } from 'react-native';
 import {
-  Body, Button, Card, Disclaimer, Heading, Muted, Pill, SectionTitle, Title,
+  Body, Button, Card, Disclaimer, Heading, Muted, Pill, SectionTitle,
+  SegmentedControl, Title,
 } from '@/components/ui';
+import { DatePickerSheet } from '@/components/DatePickerSheet';
+import {
+  dayKeyOf, formatRangeLabel, resolveRange, type ReportScope,
+} from '@/features/report/range';
+import { collectReport } from '@/features/report/collect';
+import { summarizeReport } from '@/features/report/summarize';
+import { buildReport, shareReport, type BuiltReport } from '@/services/reportExport';
 import { DogAvatar } from '@/components/ProfileHeader';
-import { colors, fontSize, spacing } from '@/theme/tokens';
+import { Icon } from '@/components/Icon';
+import { colors, fontFamily, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
+import { BackButton } from '@/components/BackButton';
 import { useActiveDog } from '@/store/appStore';
 import { breedDisplay } from '@/db/dogRepo';
 import * as seizureRepo from '@/db/seizureRepo';
@@ -54,6 +65,14 @@ export default function ReportScreen() {
   const [meds, setMeds] = useState<MedicationWithReminders[]>([]);
   const [doses, setDoses] = useState<(MedicationDose & { medicationName: string })[]>([]);
   const [loaded, setLoaded] = useState(false);
+
+  /* --- Export ------------------------------------------------------- */
+  /** 'all' keeps the screen's original behaviour, so nothing regresses. */
+  const [scope, setScope] = useState<ReportScope | 'all'>('day');
+  const [pickedDay, setPickedDay] = useState(localDayKey());
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [building, setBuilding] = useState(false);
+  const [preview, setPreview] = useState<{ seizures: number; doses: number } | null>(null);
 
   const dogId = dog?.id;
 
@@ -86,6 +105,57 @@ export default function ReportScreen() {
       };
     }, [dogId]),
   );
+
+  /**
+   * What the chosen period actually contains, loaded before anything is
+   * generated. The owner sees the counts first, so pressing Create is never a
+   * blind action — the commonest support question about an export is "did it
+   * even include anything?", and this answers it up front.
+   */
+  useEffect(() => {
+    if (!dog || scope === 'all') {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const range = resolveRange(scope, pickedDay);
+        const data = await collectReport(dog, range);
+        const summary = summarizeReport(data, dayKeyOf);
+        if (!cancelled) {
+          setPreview({ seizures: summary.seizureCount, doses: summary.doses.recorded });
+        }
+      } catch (e) {
+        console.error('[report] preview failed', e);
+        if (!cancelled) setPreview(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dog, scope, pickedDay]);
+
+  const rangeLabel =
+    scope === 'all' ? 'Everything recorded' : formatRangeLabel(resolveRange(scope, pickedDay));
+
+  const onExport = useCallback(async () => {
+    if (!dog || scope === 'all' || building) return;
+    setBuilding(true);
+    try {
+      const built: BuiltReport = await buildReport(dog, scope, pickedDay);
+      const outcome = await shareReport(built);
+      if (outcome.status === 'denied' || outcome.status === 'missing') {
+        Alert.alert('Could not share the report', outcome.message);
+      }
+    } catch (e) {
+      console.error('[report] export failed', e);
+      Alert.alert(
+        'Could not create the report',
+        'Something went wrong building the PDF. Please try again.',
+      );
+    } finally {
+      setBuilding(false);
+    }
+  }, [dog, scope, pickedDay, building]);
 
   const duration = useMemo(() => durationStats(seizures), [seizures]);
   const report = useMemo(
@@ -124,10 +194,79 @@ export default function ReportScreen() {
         { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + spacing.xl },
       ]}
     >
+      <BackButton />
       <Title>Report</Title>
       <Muted style={styles.intro}>
         Everything recorded for {dog.name}, in the order a vet usually asks for it.
       </Muted>
+
+      {/* --- Export -------------------------------------------------- */}
+      <SectionTitle>Create a file</SectionTitle>
+      <Card>
+        <Muted style={styles.exportIntro}>
+          A PDF for one day or one week, to send to your vet or keep.
+        </Muted>
+
+        <View style={styles.exportControl}>
+          <SegmentedControl<ReportScope | 'all'>
+            options={[
+              { value: 'day', label: 'Day' },
+              { value: 'week', label: 'Week' },
+              { value: 'all', label: 'All time' },
+            ]}
+            value={scope}
+            onChange={setScope}
+            accessibilityLabel="Period the report covers"
+          />
+        </View>
+
+        {scope === 'all' ? (
+          <Muted>
+            The whole history is shown below. Choose Day or Week to create a file you can send.
+          </Muted>
+        ) : (
+          <>
+            <Pressable
+              onPress={() => setPickerOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`Change the period. Currently ${rangeLabel}`}
+              style={({ pressed }) => [styles.dateBtn, pressed && styles.datePressed]}
+            >
+              <Body style={styles.flexOne}>{rangeLabel}</Body>
+              <Icon name="calendar" size="sm" color={colors.teal} />
+            </Pressable>
+
+            <Muted style={styles.previewLine}>
+              {preview === null
+                ? 'Checking what is in this period…'
+                : preview.seizures === 0 && preview.doses === 0
+                  ? 'Nothing was recorded. The file will say so, which is worth showing a vet.'
+                  : `${preview.seizures} ${preview.seizures === 1 ? 'seizure' : 'seizures'}` +
+                    `, ${preview.doses} ${preview.doses === 1 ? 'dose' : 'doses'} recorded.`}
+            </Muted>
+
+            <Button
+              label={building ? 'Creating…' : 'Create PDF'}
+              onPress={() => void onExport()}
+              loading={building}
+              accessibilityHint="Builds the report and opens the share sheet"
+              style={styles.exportBtn}
+            />
+          </>
+        )}
+      </Card>
+
+      <DatePickerSheet
+        visible={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPick={(k) => {
+          setPickedDay(k);
+          setPickerOpen(false);
+        }}
+        value={pickedDay}
+        title={scope === 'week' ? 'Pick any day in the week' : 'Pick a day'}
+        maxDate={localDayKey()}
+      />
 
       {/* --- Who ---------------------------------------------------- */}
       <Card style={{ marginTop: spacing.md }}>
@@ -364,12 +503,28 @@ function Line({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  exportIntro: { marginBottom: spacing.md },
+  exportControl: { marginBottom: spacing.md },
+  dateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: MIN_TOUCH_TARGET,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.control,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.bg,
+  },
+  datePressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
+  previewLine: { marginTop: spacing.sm },
+  exportBtn: { marginTop: spacing.md },
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg },
   intro: { marginTop: spacing.sm },
   flexOne: { flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  bold: { fontWeight: '700' },
+  bold: { fontWeight: '700', fontFamily: fontFamily.bold },
 
   dogRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
 
@@ -386,6 +541,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: 'uppercase',
     color: colors.inkSoft,
+    fontFamily: fontFamily.bold
   },
   factValue: {
     fontSize: fontSize.base,
@@ -393,6 +549,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginTop: 2,
     textTransform: 'capitalize',
+    fontFamily: fontFamily.semibold
   },
 
   notesBlock: {
@@ -427,5 +584,6 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontVariant: ['tabular-nums'],
     minWidth: 48,
+    fontFamily: fontFamily.bold
   },
 });

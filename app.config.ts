@@ -25,6 +25,11 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: BUNDLE_ID,
+    // Sign in with Apple. NOT optional: App Store guideline 4.8 requires an
+    // equivalent privacy-preserving option wherever a third-party social login
+    // is offered, and this app offers Google. Shipping Google without this is
+    // a guaranteed rejection.
+    usesAppleSignIn: true,
     // iOS shows these strings in the permission dialog. Apple REJECTS apps
     // whose strings are vague, so each one names the concrete user benefit.
     //
@@ -48,6 +53,15 @@ const config: ExpoConfig = {
       // expo-media-library is requested with writeOnly: true to match.
       NSPhotoLibraryAddUsageDescription:
         'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
+      // expo-local-authentication, for the OPT-IN app lock in Settings.
+      //
+      // This is a device lock, not a session policy. It protects the records
+      // if someone picks up an unlocked phone, requires no network, and — the
+      // reason it is the right tool — it cannot log anyone out at the wrong
+      // moment. An app that demands re-authentication at 3am has failed at the
+      // one moment it exists for.
+      NSFaceIDUsageDescription:
+        'Paws Journal can use Face ID to unlock your dog\u2019s health records.',
       // NOTE: there is deliberately NO UIBackgroundModes entry here.
       // The seizure timer does not need one — elapsed time is derived from an
       // absolute start timestamp and recomputed the instant the app returns to
@@ -149,6 +163,22 @@ const config: ExpoConfig = {
     // Playback in the gallery. expo-video replaces expo-av's Video component,
     // which is deprecated — do not add expo-av back for this.
     'expo-video',
+    // Session tokens live in the iOS keychain / Android keystore, never in
+    // AsyncStorage. These are bearer tokens for veterinary health records and
+    // AsyncStorage is plaintext on disk.
+    'expo-secure-store',
+    'expo-apple-authentication',
+    [
+      '@react-native-google-signin/google-signin',
+      {
+        // The REVERSED iOS client id, e.g. com.googleusercontent.apps.123-abc.
+        // Read from the environment because it differs per Firebase/GCP
+        // project and must not be hardcoded into a committed file.
+        iosUrlScheme:
+          process.env.GOOGLE_IOS_URL_SCHEME ?? 'com.googleusercontent.apps.PLACEHOLDER',
+      },
+    ],
+    'expo-local-authentication',
     // MUST come after expo-media-library: it caps the legacy storage
     // permissions that plugin adds uncapped. See the file for why.
     './plugins/withCappedLegacyStorage',
@@ -163,6 +193,71 @@ const config: ExpoConfig = {
       // Filled in automatically the first time you run `eas init`.
       projectId: process.env.EAS_PROJECT_ID ?? undefined,
     },
+
+    /**
+     * Supabase connection details.
+     *
+     * Both of these are PUBLIC by design and safe in a client bundle. The anon
+     * key is a signed JWT asserting the `anon` role and nothing more; Row
+     * Level Security is what actually protects the data, which is why
+     * supabase/tests/rls_smoke_test.sql runs in CI.
+     *
+     * The SERVICE ROLE key must NEVER appear here, in .env, or anywhere else
+     * this file can reach. It bypasses RLS completely. If it ever ships in a
+     * build, every account's records are readable by anyone who unzips the
+     * app.
+     */
+    /**
+     * Both naming conventions are accepted, EXPO_PUBLIC_ first.
+     *
+     * Supabase's own Expo quickstart tells you to name these
+     * EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY, so that is the
+     * name most people will already have in .env. The unprefixed name is kept
+     * as a fallback rather than dropped, because silently ignoring a variable
+     * someone has clearly set is how you get an app that builds fine, runs
+     * fine, and never syncs — with nothing anywhere saying why.
+     *
+     * Note these are read HERE and passed through `extra`, not read from
+     * process.env inside a source file. Metro only inlines EXPO_PUBLIC_* at
+     * build time, so a value that is present when you run `expo start` can be
+     * undefined at runtime if it is read from the wrong place.
+     */
+    supabaseUrl:
+      process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? '',
+
+    /**
+     * The client key, under any of the names Supabase's docs have used.
+     *
+     * Supabase is mid-migration from legacy JWT keys (`anon` / `service_role`,
+     * `eyJ…`) to the new API keys (`sb_publishable_…` / `sb_secret_…`), and
+     * their guides name the variable differently depending on vintage. Both
+     * key types work identically as the second argument to createClient, and
+     * both map to the `anon` Postgres role — so RLS is still the thing
+     * protecting the data either way.
+     *
+     * Accepting the realistic set beats one canonical name, because the
+     * failure mode of guessing wrong is silent: the app builds, runs, and
+     * simply never syncs.
+     */
+    supabaseAnonKey:
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
+      process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+      process.env.EXPO_PUBLIC_SUPABASE_KEY ??
+      process.env.SUPABASE_ANON_KEY ??
+      process.env.SUPABASE_PUBLISHABLE_KEY ??
+      process.env.SUPABASE_KEY ??
+      '',
+
+    // OAuth client ids for the NATIVE id-token flow. Also public: they
+    // identify the app to Google, they do not authorise anything on their own.
+    googleWebClientId:
+      process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
+      process.env.GOOGLE_WEB_CLIENT_ID ??
+      '',
+    googleIosClientId:
+      process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ??
+      process.env.GOOGLE_IOS_CLIENT_ID ??
+      '',
   },
 };
 

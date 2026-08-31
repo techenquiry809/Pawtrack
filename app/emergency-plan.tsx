@@ -22,8 +22,9 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Card, Disclaimer, Heading, Muted, Title } from '@/components/ui';
-import { colors, fontSize, radius, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
+import { BackButton } from '@/components/BackButton';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as dogRepo from '@/db/dogRepo';
 import type { EmergencyPlan, VetContact } from '@/types/domain';
@@ -78,6 +79,7 @@ export default function EmergencyPlanScreen() {
       ]}
       keyboardShouldPersistTaps="handled"
     >
+      <BackButton />
       <Title>Emergency plan</Title>
       <Muted style={styles.intro}>
         Your vet&apos;s numbers, and the instructions they gave you. Everything
@@ -224,16 +226,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginTop: spacing.md,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   input: {
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.field,
     paddingHorizontal: spacing.md,
     minHeight: 48,
     fontSize: fontSize.md,
     color: colors.ink,
     backgroundColor: colors.bg,
+    fontFamily: fontFamily.regular
   },
   inputTall: { minHeight: 88, paddingTop: spacing.md, textAlignVertical: 'top' },
   error: { color: colors.redDeep, marginBottom: spacing.sm },

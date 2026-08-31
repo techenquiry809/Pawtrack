@@ -25,7 +25,7 @@
 
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { colors, fontSize, radius, shadow, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, shadow, spacing } from '@/theme/tokens';
 import { Icon, type IconName } from '@/components/Icon';
 
 /* ------------------------------------------------------------------ */
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: '45%',
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.card,
     padding: spacing.md,
     ...shadow.card,
   },
@@ -176,10 +176,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.inkSoft,
     lineHeight: 17,
+    fontFamily: fontFamily.semibold
   },
   badge: {
     width: 28,
     height: 28,
+    // A CIRCLE: half of 28. Not a step on the radius scale — snapping
+    // this to a token turns the circle into a rounded square.
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -193,8 +196,9 @@ const styles = StyleSheet.create({
     color: colors.ink,
     letterSpacing: -0.6,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
-  unit: { fontSize: fontSize.sm, color: colors.inkSoft, fontWeight: '600' },
+  unit: { fontSize: fontSize.sm, color: colors.inkSoft, fontWeight: '600', fontFamily: fontFamily.semibold },
 
   chartSlot: { marginTop: spacing.sm },
 
@@ -202,7 +206,7 @@ const styles = StyleSheet.create({
   sparkCol: { flex: 1, justifyContent: 'flex-end' },
   sparkBar: { width: '100%', borderRadius: 2 },
   sparkEmpty: { justifyContent: 'flex-end' },
-  sparkEmptyText: { fontSize: fontSize.xs, color: colors.inkSoft },
+  sparkEmptyText: { fontSize: fontSize.xs, color: colors.inkSoft, fontFamily: fontFamily.regular },
 
   meterRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3 },
   meterSeg: { flex: 1, height: '70%', borderRadius: 2 },

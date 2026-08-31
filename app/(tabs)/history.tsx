@@ -46,7 +46,7 @@ import {
   type PillTone,
 } from '@/components/ui';
 import { SegmentMeter, Sparkline, StatCard } from '@/components/stats';
-import { colors, eventColors, fontSize, radius, spacing } from '@/theme/tokens';
+import { colors, eventColors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as seizureRepo from '@/db/seizureRepo';
@@ -555,6 +555,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.ink,
     letterSpacing: -0.5,
+    fontFamily: fontFamily.bold
   },
   sectionTitle: {
     fontSize: fontSize.lg,
@@ -563,6 +564,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
     marginTop: spacing.lg,
     marginBottom: spacing.md,
+    fontFamily: fontFamily.bold
   },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
   cardFoot: { marginTop: 2 },
@@ -579,16 +581,17 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
+    fontFamily: fontFamily.bold
   },
 
   eventRow: { flexDirection: 'row', gap: spacing.md },
   rail: { width: 14, alignItems: 'center' },
-  dot: { fontSize: 13, lineHeight: 18 },
+  dot: { fontSize: 13, lineHeight: 18, fontFamily: fontFamily.regular },
   railLine: { flex: 1, width: 1.5, backgroundColor: colors.line, marginTop: 2 },
   eventBody: {
     flex: 1,
     backgroundColor: colors.card,
-    borderRadius: radius.sm,
+    borderRadius: radius.card,
     borderWidth: 1,
     borderColor: colors.line,
     padding: spacing.md,
@@ -600,8 +603,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
+    fontFamily: fontFamily.bold
   },
-  eventTime: { fontSize: fontSize.sm, color: colors.inkSoft, fontVariant: ['tabular-nums'] },
+  eventTime: { fontSize: fontSize.sm, color: colors.inkSoft, fontVariant: ['tabular-nums'], fontFamily: fontFamily.regular },
   eventDetail: { marginTop: 4 },
   badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
   pressed: { opacity: 0.7 },

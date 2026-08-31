@@ -64,13 +64,14 @@ import {
   type SingleField,
   type TextField,
 } from '@/components/ObservationFields';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { useActiveDog } from '@/store/appStore';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as videoRepo from '@/db/videoRepo';
 import {
   deleteVideoAssets,
   importVideos,
+  importVideosFromFiles,
   type CapturedVideo,
 } from '@/services/videoService';
 import { formatDuration } from '@/utils/time';
@@ -145,10 +146,12 @@ export default function AddVideoScreen() {
 
   /* -------------------------------------------------------------- */
 
-  const onPick = useCallback(async () => {
+  const pickFrom = useCallback(async (source: 'photos' | 'files') => {
     setPicking(true);
     try {
-      const picked = await importVideos({ multiple: true });
+      const picked = source === 'photos'
+        ? await importVideos({ multiple: true })
+        : await importVideosFromFiles({ multiple: true });
       if (picked.length > 0) setVideos((prev) => [...prev, ...picked]);
     } catch (e) {
       Alert.alert(
@@ -159,6 +162,22 @@ export default function AddVideoScreen() {
       setPicking(false);
     }
   }, []);
+
+  /**
+   * Asks WHERE the clip is before opening a picker.
+   *
+   * The two pickers read different storage. A clip a vet emailed back, or one
+   * saved out of a messaging app, lives in Files and never appears in the
+   * photo library — so a single button that only opened Photos would look, to
+   * that owner, like the app refusing their video.
+   */
+  const onPick = useCallback(() => {
+    Alert.alert('Add a video', 'Where is the clip saved?', [
+      { text: 'Photo Library', onPress: () => void pickFrom('photos') },
+      { text: 'Files', onPress: () => void pickFrom('files') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [pickFrom]);
 
   const onRemove = useCallback((fileUri: string) => {
     setVideos((prev) => {
@@ -491,6 +510,8 @@ const styles = StyleSheet.create({
     right: -6,
     width: 28,
     height: 28,
+    // A CIRCLE: half of 28. Not a step on the radius scale — snapping
+    // this to a token turns the circle into a rounded square.
     borderRadius: 14,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -498,7 +519,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  removeIcon: { fontSize: 13, fontWeight: '700', color: colors.ink },
+  removeIcon: { fontSize: 13, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
 
   durationRow: {
     flexDirection: 'row',
@@ -515,7 +536,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.field,
     backgroundColor: colors.card,
   },
   numberBoxOff: { opacity: 0.45 },
@@ -526,21 +547,22 @@ const styles = StyleSheet.create({
     color: colors.ink,
     textAlign: 'center',
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
-  numberSuffix: { fontSize: fontSize.sm, color: colors.inkSoft, fontWeight: '600' },
+  numberSuffix: { fontSize: fontSize.sm, color: colors.inkSoft, fontWeight: '600', fontFamily: fontFamily.semibold },
 
   unknown: {
     minHeight: MIN_TOUCH_TARGET,
     paddingHorizontal: spacing.lg,
     justifyContent: 'center',
-    borderRadius: radius.pill,
+    borderRadius: radius.control,
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.card,
   },
   unknownOn: { backgroundColor: colors.tealTint, borderColor: colors.teal },
-  unknownLabel: { fontSize: fontSize.base, fontWeight: '600', color: colors.ink },
-  unknownLabelOn: { color: colors.tealDeep, fontWeight: '800' },
+  unknownLabel: { fontSize: fontSize.base, fontWeight: '600', color: colors.ink, fontFamily: fontFamily.semibold },
+  unknownLabelOn: { color: colors.tealDeep, fontWeight: '800', fontFamily: fontFamily.extrabold },
 
   durationEcho: {
     flexDirection: 'row',
@@ -554,6 +576,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.redDeep,
     lineHeight: fontSize.sm * 1.45,
+    fontFamily: fontFamily.semibold
   },
   gate: { textAlign: 'center' },
 });

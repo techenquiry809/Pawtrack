@@ -22,6 +22,22 @@
 
 import type { DailyCheckin, Seizure } from '@/types/domain';
 import { startOfDay, DAY_MS } from '@/utils/time';
+import { confidenceFor, type Confidence } from './confidence';
+export * from './confidence';
+import {
+  activeCluster,
+  dayOfWeekBands,
+  detectClusters,
+  intervalTrend,
+  type DayBand,
+  type IntervalTrend,
+  type SeizureCluster,
+} from './clusters';
+
+// The cluster maths lives in ./clusters so it can be unit tested without the
+// `@/` alias — see the note at the top of that file. Re-exported here so the
+// analytics barrel stays the one import every screen needs.
+export * from './clusters';
 
 /**
  * Below this, the screen shows a "not enough data" message and NO charts.
@@ -33,29 +49,6 @@ export const MIN_SEIZURES_FOR_PATTERNS = 3;
 /* ------------------------------------------------------------------ */
 /* Confidence                                                          */
 /* ------------------------------------------------------------------ */
-
-export const CONFIDENCE_LEVELS = ['early', 'possible', 'repeated', 'strong'] as const;
-export type Confidence = (typeof CONFIDENCE_LEVELS)[number];
-
-/**
- * Sample size, translated into a word an owner can weigh.
- *
- * Deliberately conservative: "strong" needs 20 observations and still only
- * means "this pattern has repeated", never "this is established".
- */
-export function confidenceFor(sampleSize: number): Confidence {
-  if (sampleSize >= 20) return 'strong';
-  if (sampleSize >= 10) return 'repeated';
-  if (sampleSize >= 5) return 'possible';
-  return 'early';
-}
-
-export const CONFIDENCE_BLURB: Record<Confidence, string> = {
-  early: 'Very few records so far — treat this as a first impression.',
-  possible: 'A handful of records. Worth watching, not concluding.',
-  repeated: 'This has repeated across enough records to mention to your vet.',
-  strong: 'A consistent pattern in your records. Still an association, not a cause.',
-};
 
 /* ------------------------------------------------------------------ */
 /* Time of day                                                         */
@@ -314,14 +307,28 @@ export function sleepAssociation(
  *
  * Same caveat as sleep, and worse: stress here is the owner's own 1–5 rating,
  * recorded on a day they may already know went badly.
+ *
+ * ── mood_only ROWS ARE EXCLUDED, AND THAT IS LOAD-BEARING ─────────────
+ *
+ * Tapping a face on Home creates today's check-in if none exists. That row has
+ * a real energy value and schema DEFAULTS for everything else — including
+ * `stress`, which is NOT NULL DEFAULT 2. Those 2s are not observations; nobody
+ * was asked.
+ *
+ * Averaging them in here would drag both means toward 2 and could invent, or
+ * erase, a difference between seizure days and quiet ones — in a figure an
+ * owner may repeat to their vet. So this filters exactly the way the sleep
+ * association already filters `sleepHrs !== null`: use the days that were
+ * actually answered, and be honest about the sample size that leaves.
  */
 export function stressAssociation(
   seizures: Seizure[],
   checkins: DailyCheckin[],
 ): Association | null {
+  const answered = checkins.filter((c) => !c.moodOnly);
   const seizureDays = new Set(seizures.map((s) => startOfDay(s.start)));
-  const onSeizureDays = checkins.filter((c) => seizureDays.has(startOfDay(c.timestamp)));
-  const onQuietDays = checkins.filter((c) => !seizureDays.has(startOfDay(c.timestamp)));
+  const onSeizureDays = answered.filter((c) => seizureDays.has(startOfDay(c.timestamp)));
+  const onQuietDays = answered.filter((c) => !seizureDays.has(startOfDay(c.timestamp)));
 
   if (onSeizureDays.length < 3 || onQuietDays.length < 3) return null;
 
@@ -386,6 +393,11 @@ export type PatternReport =
       duration: DurationStats;
       frequency: FrequencyComparison;
       associations: Association[];
+      /** Runs of seizures inside the owner's configured window, newest first. */
+      clusters: SeizureCluster[];
+      /** Whether the gaps between seizures are shortening. Null below 6. */
+      intervals: IntervalTrend | null;
+      days: DayBand[];
       /** True when there are too few check-ins for any control comparison. */
       needsMoreCheckins: boolean;
     };
@@ -402,6 +414,15 @@ export function buildPatternReport(
   seizures: Seizure[],
   checkins: DailyCheckin[],
   now: number,
+  /**
+   * The owner's own cluster thresholds. Passed in rather than imported so this
+   * module stays free of the settings store — and so the vet report and the
+   * dashboard cannot silently disagree about what counts as a cluster.
+   */
+  cluster: { windowHours: number; minCount: number } = {
+    windowHours: 24,
+    minCount: 2,
+  },
 ): PatternReport {
   if (seizures.length < MIN_SEIZURES_FOR_PATTERNS) {
     return {
@@ -423,6 +444,9 @@ export function buildPatternReport(
     bands: timeOfDayBands(seizures),
     duration: durationStats(seizures),
     frequency: frequencyComparison(seizures, now),
+    clusters: detectClusters(seizures, cluster.windowHours, cluster.minCount),
+    intervals: intervalTrend(seizures),
+    days: dayOfWeekBands(seizures),
     associations,
     needsMoreCheckins: checkins.length < 10,
   };

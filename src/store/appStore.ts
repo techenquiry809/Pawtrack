@@ -16,6 +16,7 @@ import { create } from 'zustand';
 import { getDb } from '@/db/client';
 import * as dogRepo from '@/db/dogRepo';
 import { DEFAULT_SETTINGS, SettingsSchema, type Dog, type Settings } from '@/types/domain';
+import { markSettingsChanged } from '@/services/sync/settings';
 
 const ACTIVE_DOG_KEY = 'activeDogId';
 const SETTINGS_KEY = 'settings';
@@ -103,6 +104,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
     await writeAppState(SETTINGS_KEY, JSON.stringify(parsed.data));
+    // Stamp a comparable time so settings sync has something to run
+    // last-write-wins against. app_state has no timestamp column of its own,
+    // and without this an edit made on one phone would never beat the copy
+    // already on the server.
+    await markSettingsChanged();
     set({ settings: parsed.data });
   },
 }));

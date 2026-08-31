@@ -27,8 +27,9 @@ import {
   Body, Button, Card, Heading, Muted, SegmentedControl, Title,
 } from '@/components/ui';
 import { DogAvatar } from '@/components/ProfileHeader';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
+import { BackButton } from '@/components/BackButton';
 import { Icon } from '@/components/Icon';
 import { DatePickerSheet, formatDayKey, parseDayKey } from '@/components/DatePickerSheet';
 import { useActiveDog, useAppStore } from '@/store/appStore';
@@ -193,6 +194,7 @@ export default function DogProfileScreen() {
       ]}
       keyboardShouldPersistTaps="handled"
     >
+      <BackButton />
       <Title>Profile</Title>
 
       {/* --- Photo --------------------------------------------------- */}
@@ -412,6 +414,8 @@ const styles = StyleSheet.create({
     bottom: -2,
     width: 34,
     height: 34,
+    // A CIRCLE: half of 34. Not a step on the radius scale — snapping
+    // this to a token turns the circle into a rounded square.
     borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
@@ -427,16 +431,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginTop: spacing.md,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   input: {
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.field,
     paddingHorizontal: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
     fontSize: fontSize.md,
     color: colors.ink,
     backgroundColor: colors.bg,
+    fontFamily: fontFamily.regular
   },
   inputTall: { minHeight: 76, paddingTop: spacing.md, textAlignVertical: 'top' },
   dateInput: {
@@ -445,8 +451,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  dateText: { flex: 1, fontSize: fontSize.md, fontWeight: '600', color: colors.ink },
-  datePlaceholder: { color: colors.inkSoft, fontWeight: '500' },
+  dateText: { flex: 1, fontSize: fontSize.md, fontWeight: '600', color: colors.ink, fontFamily: fontFamily.semibold },
+  datePlaceholder: { color: colors.inkSoft, fontWeight: '500', fontFamily: fontFamily.medium },
 
   pairRow: { flexDirection: 'row', gap: spacing.md },
 
@@ -455,12 +461,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.card,
     paddingHorizontal: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
     backgroundColor: colors.bg,
   },
-  linkValue: { flex: 1, fontSize: fontSize.md, color: colors.ink, fontWeight: '600' },
+  linkValue: { flex: 1, fontSize: fontSize.md, color: colors.ink, fontWeight: '600', fontFamily: fontFamily.semibold },
 
   error: { color: colors.redDeep, marginBottom: spacing.sm },
 });

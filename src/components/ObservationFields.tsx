@@ -147,6 +147,113 @@ function MultiSelect({
  * owner watching a seizure actually perceives things in. It is not alphabetical
  * and should not be made so.
  */
+/* ------------------------------------------------------------------ */
+/* One question at a time                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The same questions, exposed individually so a screen can put each on its own
+ * step.
+ *
+ * Split out rather than copied into the stepped screens, for the reason this
+ * file already exists: the option arrays must have exactly one home. Three
+ * screens holding three copies of MOVEMENT_OPTIONS is a drift waiting to
+ * happen, and a drifted option list means two records that describe the same
+ * thing with different words.
+ *
+ * The grouped `IctalFields` / `AftermathFields` below stay for the screens
+ * that genuinely want everything at once.
+ */
+export function MovementField({ value, on }: Props) {
+  return (
+    <MultiSelect
+      options={MOVEMENT_OPTIONS}
+      selected={value.ictalObs}
+      onToggle={(o) => on.toggle('ictalObs', o)}
+    />
+  );
+}
+
+export function AwarenessField({ value, on }: Props) {
+  return (
+    <SingleSelect
+      options={AWARENESS_OPTIONS}
+      selected={value.awareness}
+      onSelect={(o) => on.setSingle('awareness', o)}
+    />
+  );
+}
+
+export function AutonomicField({ value, on }: Props) {
+  return (
+    <MultiSelect
+      options={AUTONOMIC_OPTIONS}
+      selected={value.autonomic}
+      onToggle={(o) => on.toggle('autonomic', o)}
+    />
+  );
+}
+
+export function PositionField({ value, on }: Props) {
+  return (
+    <SingleSelect
+      options={POSITION_OPTIONS}
+      selected={value.position}
+      onSelect={(o) => on.setSingle('position', o)}
+    />
+  );
+}
+
+export function PostBehaviorField({ value, on }: Props) {
+  return (
+    <MultiSelect
+      options={POST_BEHAVIOR_OPTIONS}
+      selected={value.postBehavior}
+      onToggle={(o) => on.toggle('postBehavior', o)}
+    />
+  );
+}
+
+export function PreIctalField({ value, on }: Props) {
+  return (
+    <>
+      <MultiSelect
+        options={PRE_ICTAL_OPTIONS}
+        selected={value.preIctalObs}
+        onToggle={(o) => on.toggle('preIctalObs', o)}
+      />
+      <TextArea
+        value={value.preIctalNote}
+        onChangeText={(t) => on.setText('preIctalNote', t)}
+        placeholder="Anything else you noticed beforehand (optional)"
+        accessibilityLabel="Notes about what you noticed before the seizure"
+      />
+    </>
+  );
+}
+
+export function SeverityField({ value, on }: Props) {
+  return (
+    <SingleSelect
+      options={SEVERITY_OPTIONS}
+      selected={value.severityOwner}
+      onSelect={(o) => on.setSingle('severityOwner', o)}
+    />
+  );
+}
+
+export function NotesField({ value, on }: Props) {
+  return (
+    <TextArea
+      tall
+      value={value.notes}
+      onChangeText={(t) => on.setText('notes', t)}
+      placeholder="Anything you want to remember or tell your vet (optional)"
+      accessibilityLabel="Notes about this seizure"
+    />
+  );
+}
+
 export function IctalFields({ value, on }: Props) {
   return (
     <>

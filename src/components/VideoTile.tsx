@@ -11,12 +11,26 @@
  * footage. A missing poster frame is normal, so the empty state is designed
  * rather than left as a grey box: it keeps the duration and the badge, so the
  * tile still tells you what it is.
+ *
+ * ── AND NEITHER IS A VIDEO THAT LIVES ON ANOTHER PHONE ────────────────
+ *
+ * Seizure video files never leave the device that recorded them. The video ROW
+ * syncs, because "a recording exists for this seizure" is clinically
+ * meaningful — a vet report saying so is useful even where the file is not.
+ * The bytes do not, because a path from another device resolves to nothing
+ * here.
+ *
+ * So on a second device this tile has real content to show and no frames to
+ * show it with. That gets a DESIGNED state, not a broken image and not a
+ * hidden tile: hiding it would misrepresent the record, and a broken tile
+ * reads as a bug the owner will worry about. It names the phone that has the
+ * clip so there is something to act on.
  */
 
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Icon } from '@/components/Icon';
-import { colors, fontSize, radius, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { thumbnailUri } from '@/services/videoService';
 import { formatDuration } from '@/utils/time';
 import type { CaptureConfidence } from '@/types/domain';
@@ -24,6 +38,18 @@ import type { CaptureConfidence } from '@/types/domain';
 export type VideoTileProps = {
   thumbUri: string;
   durationSec: number | null;
+  /**
+   * False when the bytes are on another device. Defaults to true so the
+   * gallery's existing call sites and the import strip — where the file is by
+   * definition local — are unaffected.
+   */
+  isLocal?: boolean;
+  /**
+   * The phone that recorded it, for the remote state's caption. Falls back to
+   * "another device" when the device registry has not been read yet or the
+   * clip predates device tracking.
+   */
+  originDeviceName?: string | null;
   /** Rendered bottom-left. Usually the time of day. */
   caption?: string;
   /**
@@ -41,6 +67,8 @@ export type VideoTileProps = {
 export function VideoTile({
   thumbUri,
   durationSec,
+  isLocal = true,
+  originDeviceName,
   caption,
   captureConfidence,
   onPress,
@@ -48,7 +76,9 @@ export function VideoTile({
   accessibilityLabel,
   aspect = 1,
 }: VideoTileProps) {
-  const uri = thumbUri ? thumbnailUri(thumbUri) : '';
+  // A remote clip has no poster frame here either — the thumbnail is extracted
+  // from the bytes, so it lives with them.
+  const uri = isLocal && thumbUri ? thumbnailUri(thumbUri) : '';
   const stated = captureConfidence === 'owner_stated';
   const unknown = captureConfidence === 'unknown';
 
@@ -57,8 +87,23 @@ export function VideoTile({
       {uri ? (
         <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
       ) : (
-        <View style={[styles.thumb, styles.placeholder]}>
-          <Icon name="camera" size="lg" color={colors.inkSoft} />
+        <View
+          style={[
+            styles.thumb,
+            styles.placeholder,
+            !isLocal && styles.placeholderRemote,
+          ]}
+        >
+          <Icon
+            name={isLocal ? 'camera' : 'device'}
+            size="lg"
+            color={isLocal ? colors.inkSoft : colors.tealDeep}
+          />
+          {!isLocal && (
+            <Text style={styles.remoteLabel} numberOfLines={2}>
+              On {originDeviceName ?? 'another device'}
+            </Text>
+          )}
         </View>
       )}
 
@@ -107,7 +152,7 @@ const styles = StyleSheet.create({
   pressable: { flex: 1 },
   tile: {
     flex: 1,
-    borderRadius: radius.sm,
+    borderRadius: radius.card,
     overflow: 'hidden',
     backgroundColor: colors.line,
     borderWidth: 1,
@@ -120,6 +165,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.bg,
+  },
+  /**
+   * Tinted rather than grey. The point of this state is that nothing is wrong
+   * — the record is complete and the clip is simply somewhere else — so it has
+   * to read as a deliberate surface, not as a failed load.
+   */
+  placeholderRemote: {
+    backgroundColor: colors.tealTint,
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+  },
+  remoteLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.tealDeep,
+    textAlign: 'center',
+    fontFamily: fontFamily.bold
   },
   scrim: {
     position: 'absolute',
@@ -144,6 +206,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.onMedia,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.extrabold
   },
   badgeStatedText: { color: colors.amberInk },
   caption: {
@@ -155,5 +218,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.onMedia,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
 });

@@ -228,14 +228,177 @@ or risk — that needs population-level denominator data this app does not have.
 
 ---
 
+## Accounts and multi-device sync
+
+### The one principle everything follows
+
+**SQLite on the phone stays the source of truth. Supabase is a sync target,
+not a database the app reads from.**
+
+Every screen reads local SQLite exactly as it did before. Nothing in `app/`
+knows a network exists. A seizure gets recorded in a field with no signal, and
+the durability design — the row inserted on the first tap, the monotonic
+clock, the crash salvage — depends on a local write that cannot fail. A cloud
+round trip anywhere in that path would undo it.
+
+Sync is a background process that drains a queue. If it never runs, the app
+still works completely. Accounts are **optional**: the sign-in screen is
+offered once and can be declined forever (`src/services/authPrompt.ts`).
+
+### The two-database model
+
+| Syncs | Never syncs | Why not |
+|---|---|---|
+| `dogs`, `seizures`, `videos` (metadata), `seizure_edits`, `medications`, `medication_reminders`, `medication_doses`, `daily_checkins`, `meals`, settings | Video and thumbnail **files** | Deliberate. See below. |
+| | `video_files.file_uri` / `thumb_uri` | A path is meaningless on another device, and iOS reassigns the container UUID (`src/services/fileStore.ts`). |
+| | `medication_reminders.notification_id` | A handle from `expo-notifications` on device A **cannot be cancelled from device B**. Each device schedules and owns its own. |
+| | `dogs.photo_uri` | Same as video paths. |
+| | Active-dog selection | A per-device UI preference, not a fact about the dog. |
+
+That `notification_id` row is the one most likely to be missed, and the bug it
+causes is nasty: a reminder that cannot be turned off from the phone you are
+holding.
+
+`src/db/syncSchema.ts` is the single manifest. Adding a column and forgetting
+it there means it does not sync — the safe direction to fail in.
+
+### Videos: metadata syncs, bytes do not
+
+The video **row** is clinical data. A vet report saying "a recording exists for
+this seizure" is meaningful on a device that cannot play it, so the row syncs.
+The **bytes** are local, so the paths must not.
+
+A video is present on this device **iff** a `video_files` row exists. That is
+the whole test, surfaced as `Video.isLocal`. On a second device the gallery
+renders a designed "Recorded on Sam's iPhone" state — not a broken tile, and
+not a hidden one.
+
+**The deletion asymmetry is deliberate.** Deleting the video *row* is a
+clinical edit and syncs everywhere. Deleting a *file* is device-local
+housekeeping and does not — a phone freeing up space must not destroy the
+record for everyone.
+
+### Why the pull cursor is a sequence, not a timestamp
+
+Every server row carries `sync_seq` from one global Postgres sequence. Two
+phones 40 seconds apart would produce a *timestamp* cursor that silently skips
+rows. A server-side sequence is monotonic by construction.
+
+This is the same refusal to trust a wall clock that `src/utils/clock.ts` makes
+about seizure duration, applied to replication.
+
+### Deletes are tombstones, and they do not cascade for free
+
+A hard DELETE cannot be replicated — the next pull would helpfully restore the
+row. So every delete became `UPDATE … SET deleted_at`.
+
+**The trap:** SQLite's `ON DELETE CASCADE` fires on a DELETE and *not* on an
+UPDATE. The moment deletes went soft, every cascade in the schema silently
+stopped working, with no error. `src/db/tombstone.ts` walks the subtree
+explicitly. Covered by `src/db/outbox.test.ts`.
+
+### Conflict resolution
+
+Last-write-wins on `updated_at`, with three exceptions, all enforced
+**server-side** in `sync_push` — a client-side rule is only as good as the
+oldest app version still installed:
+
+| Field group | Rule |
+|---|---|
+| `duration_sec` + `duration_confidence` | Confidence rank wins first (`high > clock_corrected > recovered > unreliable > legacy`); `updated_at` only breaks ties. A stale phone must never overwrite a stopwatch measurement with an estimate. |
+| `deleted_at` | Delete always wins, and is terminal. A resurrected seizure record is worse than a lost edit. |
+| `daily_checkins`, `medication_doses` | Merged on their natural key. Two phones logging the same dose is one dose. The server returns a remap so the client collapses its local duplicate. |
+
+### Sessions: many devices, all active at once
+
+Signing in on a second device **never** signs the first one out. The full
+argument is at the top of `src/services/sync/devices.ts`; the short version is
+that a single-session policy would make someone log in during a seizure, and
+it does not even work — Supabase access tokens are stateless JWTs valid until
+they expire regardless of what the server thinks.
+
+The security control is visibility and revocation the owner chooses: a device
+registry, a "Your devices" screen, and a new-device email. Revocation drains
+the outbox **before** it clears the session, or revocation becomes a data-loss
+path.
+
+Session lifetime is deliberately indefinite. If you want protection against
+someone picking up an unlocked phone, that is a **device lock, not a session
+policy** — opt-in Face ID in `src/services/appLock.ts`, which cannot log
+anyone out at the wrong moment.
+
+### Testing the parts that cannot be reviewed
+
+RLS is the entire security model (the app ships the public `anon` key), and
+`sync_push` decides which version of a seizure record survives. Neither is
+verifiable by reading it.
+
+```
+npm run test:db      # spins up a throwaway PostgreSQL cluster, applies the
+                     # schema, asserts two schema invariants, runs the RLS and
+                     # sync_push suites, tears down
+```
+
+Needs only a PostgreSQL install — no Docker, no Supabase CLI. The RLS suite
+signs in as user B and tries six ways to reach user A's dog.
+
+It has already caught three real bugs, all of which passed a reading of the
+SQL:
+
+1. **Revoking the sequence from `authenticated` broke every insert** — the
+   stamping trigger is invoked as the *caller*, so it hit the revoke. Fixed by
+   making `stamp_sync_seq()` SECURITY DEFINER with a pinned `search_path`.
+2. **Eight foreign keys had no usable index.** Postgres does not index the
+   referencing side. That turns `delete_own_account()` — one delete from
+   `auth.users` cascading across nine tables — into a sequential scan of every
+   table for every user. Note that a *partial* unique index does not count:
+   `daily_checkins` and `medication_doses` looked covered and were not, because
+   their indexes carry `where deleted_at is null` and a cascade must still
+   reach tombstoned rows.
+3. **`purge_tombstones()` was callable by `anon`.** Postgres grants EXECUTE on
+   every new function to PUBLIC, and `anon` inherits from PUBLIC — so
+   `revoke ... from anon, authenticated` was a no-op against the PUBLIC grant.
+   An unauthenticated caller holding only the public key could run a
+   SECURITY DEFINER maintenance sweep and advance the global tombstone horizon,
+   forcing every device into a full resync. The revoke has to name `public`.
+
+The last two are now **asserted on every run** rather than fixed once, because
+adding a table or a function reintroduces them silently:
+
+```
+→ foreign key indexes
+   ✓ every foreign key is indexed
+→ security definer exposure
+   ✓ no security definer function is reachable by anon
+```
+
+Both assertions were negative-tested — reintroduce either fault and the runner
+exits 1.
+
+### Least privilege on the Data API
+
+`authenticated` is granted `select, insert, update` on the synced tables and
+deliberately **not** `delete`. Nothing in the client hard-deletes a server row:
+every user-facing delete is a tombstone (an UPDATE), and the two functions that
+really delete are SECURITY DEFINER. So withholding DELETE costs nothing and
+means a stolen access token cannot destroy a seizure record — the worst it can
+do is tombstone one, which stays recoverable for the whole retention window.
+
+---
+
 ## Known limitations (carried forward honestly)
 
-1. **Single device, no sync, no accounts.** Multi-caregiver support (owner /
-   editor / viewer, tracking who entered each record) is not built. The schema
-   has no user concept yet. This is the biggest gap for a real household.
-2. **Seizure context fields are free text.** The intended upgrade is linking
+1. **Seizure context fields are free text.** The intended upgrade is linking
    them to logged entities so intervals are computed rather than typed.
-3. **No screens yet** for standalone food/sleep/exercise/symptom/exposure logs,
+2. **No screens yet** for standalone food/sleep/exercise/symptom/exposure logs,
    vet document attachments, or reminders beyond medication.
-4. **No cloud backup.** Videos live only on the device.
-5. **Background execution is limited** — see the timer section above.
+3. **Video files still live only on the device.** That is a deliberate design
+   choice, not a gap — but it does mean a lost phone loses its recordings,
+   and the tile state exists to make that legible rather than surprising.
+4. **Background execution is limited** — see the timer section above.
+5. **Multi-caregiver is not built**, but the door is left open cheaply:
+   `dog_id` is now on every synced table, and `dogs.user_id` is the *owner*
+   rather than the only reader. Adding a `dog_members` join table plus an RLS
+   policy migration gets there without restructuring tables.
+6. **`meals` is a dead table.** It has a schema, a type and now sync coverage,
+   but no repository and no screen writes it.

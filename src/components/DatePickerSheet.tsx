@@ -37,7 +37,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Icon } from '@/components/Icon';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { localDayKey } from '@/utils/time';
 
 /** Monday-first: the app's users think in weeks that start on Monday. */
@@ -422,7 +422,7 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: colors.card,
-    borderRadius: radius.lg,
+    borderRadius: radius.sheet,
     padding: spacing.lg,
   },
 
@@ -431,8 +431,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  title: { flex: 1, fontSize: fontSize.md, fontWeight: '800', color: colors.ink },
-  close: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink },
+  title: { flex: 1, fontSize: fontSize.md, fontWeight: '800', color: colors.ink, fontFamily: fontFamily.extrabold },
+  close: { fontSize: fontSize.md, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
 
   monthRow: {
     flexDirection: 'row',
@@ -440,7 +440,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: spacing.sm,
   },
-  monthLabel: { fontSize: fontSize.md, fontWeight: '800', color: colors.ink },
+  monthLabel: { fontSize: fontSize.md, fontWeight: '800', color: colors.ink, fontFamily: fontFamily.extrabold },
   monthBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -469,13 +469,13 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: radius.pill,
+    borderRadius: radius.control,
     backgroundColor: colors.bg,
   },
   zoomPillOn: { backgroundColor: colors.teal },
-  zoomText: { fontSize: fontSize.base, fontWeight: '700', color: colors.ink },
-  zoomTextOut: { color: colors.inkSoft, opacity: 0.4, fontWeight: '500' },
-  zoomTextOn: { color: colors.onMedia, fontWeight: '800' },
+  zoomText: { fontSize: fontSize.base, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
+  zoomTextOut: { color: colors.inkSoft, opacity: 0.4, fontWeight: '500', fontFamily: fontFamily.medium },
+  zoomTextOn: { color: colors.onMedia, fontWeight: '800', fontFamily: fontFamily.extrabold },
   // The icon set has one chevron; the back arrow is it, mirrored.
   flip: { transform: [{ scaleX: -1 }] },
   iconBtn: {
@@ -511,9 +511,9 @@ const styles = StyleSheet.create({
   },
   dayToday: { borderWidth: 1.5, borderColor: colors.teal },
   daySelected: { backgroundColor: colors.teal },
-  dayText: { fontSize: fontSize.base, fontWeight: '700', color: colors.ink },
-  dayTextOut: { color: colors.inkSoft, opacity: 0.4, fontWeight: '500' },
-  dayTextSelected: { color: colors.onMedia, fontWeight: '800' },
+  dayText: { fontSize: fontSize.base, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
+  dayTextOut: { color: colors.inkSoft, opacity: 0.4, fontWeight: '500', fontFamily: fontFamily.medium },
+  dayTextSelected: { color: colors.onMedia, fontWeight: '800', fontFamily: fontFamily.extrabold },
 
   actions: {
     flexDirection: 'row',
@@ -526,9 +526,9 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
-    borderRadius: radius.pill,
+    borderRadius: radius.control,
   },
   actionPrimary: { backgroundColor: colors.tealTint },
-  actionText: { fontSize: fontSize.base, fontWeight: '800', color: colors.inkSoft },
+  actionText: { fontSize: fontSize.base, fontWeight: '800', color: colors.inkSoft, fontFamily: fontFamily.extrabold },
   actionTextPrimary: { color: colors.tealDeep },
 });

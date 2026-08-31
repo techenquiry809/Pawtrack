@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, fontSize, radius, shadow, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, shadow, spacing } from '@/theme/tokens';
 import { breedDisplay } from '@/db/dogRepo';
 import { dogPhotoUri } from '@/services/dogPhotoService';
 import { Icon } from '@/components/Icon';
@@ -95,7 +95,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.card,
     padding: spacing.md,
     ...shadow.card,
   },
@@ -106,6 +106,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1.4,
     color: colors.inkSoft,
+    fontFamily: fontFamily.bold
   },
   name: {
     fontSize: fontSize.lg,
@@ -113,8 +114,9 @@ const styles = StyleSheet.create({
     color: colors.ink,
     letterSpacing: -0.4,
     marginTop: 2,
+    fontFamily: fontFamily.bold
   },
-  sub: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1 },
+  sub: { fontSize: fontSize.sm, color: colors.inkSoft, marginTop: 1, fontFamily: fontFamily.regular },
 
   avatar: { backgroundColor: colors.tealTint },
   avatarFallback: {

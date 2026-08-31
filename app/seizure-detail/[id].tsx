@@ -25,8 +25,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Body, Button, Card, Heading, Muted, Pill, SectionTitle, Title, type PillTone,
 } from '@/components/ui';
-import { colors, fontSize, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
+import { BackButton } from '@/components/BackButton';
 import * as seizureRepo from '@/db/seizureRepo';
 import { deleteVideoAssets } from '@/services/videoService';
 import { formatDuration } from '@/utils/time';
@@ -162,6 +163,7 @@ export default function SeizureDetailScreen() {
   if (!record) {
     return (
       <ScrollView style={styles.screen} contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.md }]}>
+        <BackButton />
         <Title>Record not found</Title>
         <Muted style={{ marginTop: spacing.sm }}>
           This seizure may have been deleted.
@@ -346,29 +348,30 @@ function ObservationList({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg },
-  eyebrow: { fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase' },
+  eyebrow: { fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', fontFamily: fontFamily.bold },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
   duration: {
-    fontSize: 40,
+    fontSize: fontSize.timerSm,
     fontWeight: '700',
     color: colors.ink,
     letterSpacing: -1,
     fontVariant: ['tabular-nums'],
     marginTop: 4,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
 
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   tag: {
     backgroundColor: colors.bg,
-    borderRadius: 100,
+    borderRadius: radius.pill,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderWidth: 1,
     borderColor: colors.line,
   },
-  tagText: { fontSize: fontSize.sm, color: colors.ink, fontWeight: '600' },
+  tagText: { fontSize: fontSize.sm, color: colors.ink, fontWeight: '600', fontFamily: fontFamily.semibold },
 
   editRow: {
     flexDirection: 'row',

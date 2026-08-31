@@ -27,7 +27,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { SectionRule } from '@/components/form';
 import { Icon } from '@/components/Icon';
 import { DatePickerSheet, formatDayKey } from '@/components/DatePickerSheet';
@@ -345,14 +345,14 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     paddingHorizontal: spacing.lg,
     justifyContent: 'center',
-    borderRadius: radius.pill,
+    borderRadius: radius.control,
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.card,
   },
   shortcutOn: { backgroundColor: colors.tealTint, borderColor: colors.teal },
-  shortcutLabel: { fontSize: fontSize.base, fontWeight: '600', color: colors.ink },
-  shortcutLabelOn: { color: colors.tealDeep, fontWeight: '800' },
+  shortcutLabel: { fontSize: fontSize.base, fontWeight: '600', color: colors.ink, fontFamily: fontFamily.semibold },
+  shortcutLabelOn: { color: colors.tealDeep, fontWeight: '800', fontFamily: fontFamily.extrabold },
 
   groups: { flexDirection: 'row', gap: spacing.lg, flexWrap: 'wrap' },
   group: { gap: spacing.sm },
@@ -363,6 +363,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.9,
     textTransform: 'uppercase',
     color: colors.inkSoft,
+    fontFamily: fontFamily.bold
   },
   fieldRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   dateBtn: {
@@ -374,22 +375,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.control,
     backgroundColor: colors.card,
   },
-  dateBtnText: { fontSize: fontSize.base, fontWeight: '700', color: colors.ink },
+  dateBtnText: { fontSize: fontSize.base, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
   segment: {
     width: 54,
     minHeight: MIN_TOUCH_TARGET,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.control,
     backgroundColor: colors.card,
     textAlign: 'center',
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
   segmentWide: { width: 76 },
   separator: {
@@ -397,6 +399,7 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     fontWeight: '700',
     paddingHorizontal: 2,
+    fontFamily: fontFamily.bold
   },
 
   error: {
@@ -405,11 +408,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.redDeep,
     lineHeight: fontSize.sm * 1.45,
+    fontFamily: fontFamily.semibold
   },
   help: {
     marginTop: spacing.md,
     fontSize: fontSize.sm,
     color: colors.inkSoft,
     lineHeight: fontSize.sm * 1.45,
+    fontFamily: fontFamily.regular
   },
 });

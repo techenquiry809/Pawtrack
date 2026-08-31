@@ -23,6 +23,9 @@ import {
 } from '@/types/domain';
 import { resolveRecoveredDuration, type DurationConfidence } from '@/utils/clock';
 import * as videoRepo from './videoRepo';
+import { newRowOwner, ownerScope } from './scope';
+import { enqueue } from './outbox';
+import { tombstone } from './tombstone';
 
 const EMPTY_CONTEXT: SeizureContext = {
   food: '', sleep: '', exercise: '', medication: '',
@@ -105,12 +108,24 @@ function rowToSeizure(row: SeizureRow): Seizure {
  */
 const COMPLETE = "status = 'complete'";
 
+/**
+ * Reads go through `seizures_live`, which bakes in `deleted_at IS NULL`.
+ *
+ * Two predicates now have to be on every read — the tombstone filter and the
+ * owner fence — and both are one forgotten query away from a bad bug: a
+ * deleted seizure reappearing in a vet report, or one account's records
+ * showing under another's on a shared phone. The view removes the first from
+ * the list of things to remember; ownerScope() makes the second impossible to
+ * omit silently, because it never returns an empty string.
+ */
 
 export async function listSeizures(dogId: string): Promise<Seizure[]> {
   const db = await getDb();
+  const owner = ownerScope();
   const rows = await db.getAllAsync<SeizureRow>(
-    `SELECT * FROM seizures WHERE dog_id = ? AND ${COMPLETE} ORDER BY start DESC`,
-    [dogId],
+    `SELECT * FROM seizures_live
+      WHERE dog_id = ? AND ${owner.sql} AND ${COMPLETE} ORDER BY start DESC`,
+    [dogId, ...owner.params],
   );
   return rows.map(rowToSeizure);
 }
@@ -120,18 +135,54 @@ export async function listSeizuresSince(
   sinceEpochMs: number,
 ): Promise<Seizure[]> {
   const db = await getDb();
+  const owner = ownerScope();
   const rows = await db.getAllAsync<SeizureRow>(
-    `SELECT * FROM seizures WHERE dog_id = ? AND start >= ? AND ${COMPLETE} ORDER BY start DESC`,
-    [dogId, sinceEpochMs],
+    `SELECT * FROM seizures_live
+      WHERE dog_id = ? AND start >= ? AND ${owner.sql} AND ${COMPLETE}
+      ORDER BY start DESC`,
+    [dogId, sinceEpochMs, ...owner.params],
+  );
+  return rows.map(rowToSeizure);
+}
+
+/**
+ * Every complete seizure whose START falls inside a half-open range.
+ *
+ * ── WHY HALF-OPEN, AND WHY `start` ────────────────────────────────────
+ *
+ * `[fromMs, toMs)` so consecutive days share no seizure. A closed range would
+ * put a seizure at exactly midnight in both the day that ended and the day
+ * that began, and a vet reading two reports would count it twice.
+ *
+ * Bucketed on `start`, not `end`: an event that begins at 23:58 and recovers
+ * at 00:20 belongs to the night it happened. Splitting one seizure across two
+ * reports would be worse than either report being slightly long.
+ *
+ * ASCENDING, unlike `listSeizuresSince`, which feeds a newest-first list. A
+ * report is read as a narrative of the day, so it runs forwards.
+ */
+export async function listSeizuresBetween(
+  dogId: string,
+  fromMs: number,
+  toMs: number,
+): Promise<Seizure[]> {
+  const db = await getDb();
+  const owner = ownerScope();
+  const rows = await db.getAllAsync<SeizureRow>(
+    `SELECT * FROM seizures_live
+      WHERE dog_id = ? AND start >= ? AND start < ? AND ${owner.sql} AND ${COMPLETE}
+      ORDER BY start ASC`,
+    [dogId, fromMs, toMs, ...owner.params],
   );
   return rows.map(rowToSeizure);
 }
 
 export async function getSeizure(id: string): Promise<SeizureWithVideos | null> {
   const db = await getDb();
+  const owner = ownerScope();
   const row = await db.getFirstAsync<SeizureRow>(
-    'SELECT * FROM seizures WHERE id = ?',
-    [id],
+    `SELECT * FROM seizures_live WHERE id = ? AND ${owner.sql}`,
+    [id, ...owner.params],
   );
   if (!row) return null;
   // The videos table has exactly one owner (videoRepo). This used to query it
@@ -147,9 +198,12 @@ export async function getMostRecentSeizure(
   beforeEpochMs: number,
 ): Promise<Seizure | null> {
   const db = await getDb();
+  const owner = ownerScope();
   const row = await db.getFirstAsync<SeizureRow>(
-    `SELECT * FROM seizures WHERE dog_id = ? AND start < ? AND ${COMPLETE} ORDER BY start DESC LIMIT 1`,
-    [dogId, beforeEpochMs],
+    `SELECT * FROM seizures_live
+      WHERE dog_id = ? AND start < ? AND ${owner.sql} AND ${COMPLETE}
+      ORDER BY start DESC LIMIT 1`,
+    [dogId, beforeEpochMs, ...owner.params],
   );
   return row ? rowToSeizure(row) : null;
 }
@@ -162,9 +216,11 @@ export async function countSeizuresInWindow(
 ): Promise<number> {
   const db = await getDb();
   const windowStart = atEpochMs - windowHours * 3_600_000;
+  const owner = ownerScope();
   const row = await db.getFirstAsync<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM seizures WHERE dog_id = ? AND start >= ? AND start <= ? AND ${COMPLETE}`,
-    [dogId, windowStart, atEpochMs],
+    `SELECT COUNT(*) AS n FROM seizures_live
+      WHERE dog_id = ? AND start >= ? AND start <= ? AND ${owner.sql} AND ${COMPLETE}`,
+    [dogId, windowStart, atEpochMs, ...owner.params],
   );
   return row?.n ?? 0;
 }
@@ -198,17 +254,18 @@ export async function createSeizure(input: NewSeizureInput): Promise<string> {
     ? Math.round((input.start - prev.start) / 1000)
     : null;
 
+  await db.withTransactionAsync(async () => {
   await db.runAsync(
     `INSERT INTO seizures (
-      id, dog_id, start, end, duration_sec, timing_confidence, retrospective,
+      id, user_id, dog_id, start, end, duration_sec, timing_confidence, retrospective,
       pre_ictal_obs, pre_ictal_note, ictal_obs, awareness, autonomic, position,
       post_behavior, severity_owner, recovery_start, recovery_end, recovery_sec,
       context_json, notes, time_since_prev_sec,
       status, duration_confidence, last_touched_at, tz_offset_min,
       created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'complete',?,?,?,?,?)`,
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'complete',?,?,?,?,?)`,
     [
-      id, input.dogId, input.start, input.end, input.durationSec,
+      id, newRowOwner(), input.dogId, input.start, input.end, input.durationSec,
       input.timingConfidence, toSqlBool(input.retrospective),
       toSqlJson(input.preIctalObs), input.preIctalNote,
       toSqlJson(input.ictalObs), input.awareness,
@@ -222,6 +279,8 @@ export async function createSeizure(input: NewSeizureInput): Promise<string> {
       now, now,
     ],
   );
+    await enqueue(db, 'seizures', id, 'upsert', now);
+  });
   return id;
 }
 
@@ -256,16 +315,24 @@ export async function openSeizure(input: OpenSeizureInput): Promise<string> {
   const id = uid();
   const now = Date.now();
 
-  await db.runAsync(
-    `INSERT INTO seizures (
-      id, dog_id, start, tz_offset_min, retrospective, timing_confidence,
-      status, duration_confidence, last_touched_at, created_at, updated_at
-    ) VALUES (?,?,?,?,?,'exact','in_progress','unreliable',?,?,?)`,
-    [
-      id, input.dogId, input.startedAtUtc, input.tzOffsetMin,
-      toSqlBool(input.retrospective ?? false), now, now, now,
-    ],
-  );
+  // Queued for push like any other write, but NOT pushed yet — the worker is
+  // explicitly forbidden from running during the live seizure flow. See the
+  // scheduling rules in src/services/sync/worker.ts. The row exists locally
+  // from this instant, which is the durability guarantee that matters; getting
+  // it to the server can wait for the recovery screen.
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO seizures (
+        id, user_id, dog_id, start, tz_offset_min, retrospective, timing_confidence,
+        status, duration_confidence, last_touched_at, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,'exact','in_progress','unreliable',?,?,?)`,
+      [
+        id, newRowOwner(), input.dogId, input.startedAtUtc, input.tzOffsetMin,
+        toSqlBool(input.retrospective ?? false), now, now, now,
+      ],
+    );
+    await enqueue(db, 'seizures', id, 'upsert', now);
+  });
   return id;
 }
 
@@ -331,11 +398,20 @@ export async function patchSeizure(
 
   // The status guard means a finalized or abandoned row can never be mutated
   // by a late write from a screen that has not unmounted yet.
-  await db.runAsync(
-    `UPDATE seizures SET ${sets.join(', ')}
-      WHERE id = ? AND status = 'in_progress'`,
-    values,
-  );
+  //
+  // The outbox entry is queued unconditionally rather than only when the
+  // UPDATE matched. It is idempotent (one row per pending intent), the push
+  // sends whatever the row currently says, and a no-op push costs far less
+  // than reasoning about whether a guard rejected a write we still needed to
+  // replicate.
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE seizures SET ${sets.join(', ')}
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+      values,
+    );
+    await enqueue(db, 'seizures', seizureId, 'upsert', now);
+  });
 }
 
 /**
@@ -369,17 +445,20 @@ export async function finalizeSeizure(
 
   const recoverySec = await computeRecoverySec(seizureId);
 
-  await db.runAsync(
-    `UPDATE seizures
-        SET duration_sec = ?, duration_confidence = ?, recovery_sec = ?,
-            time_since_prev_sec = ?, status = 'complete',
-            last_touched_at = ?, updated_at = ?
-      WHERE id = ? AND status = 'in_progress'`,
-    [
-      value.durationSeconds ?? 0, value.durationConfidence, recoverySec,
-      timeSincePrevSec, now, now, seizureId,
-    ],
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE seizures
+          SET duration_sec = ?, duration_confidence = ?, recovery_sec = ?,
+              time_since_prev_sec = ?, status = 'complete',
+              last_touched_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+      [
+        value.durationSeconds ?? 0, value.durationConfidence, recoverySec,
+        timeSincePrevSec, now, now, seizureId,
+      ],
+    );
+    await enqueue(db, 'seizures', seizureId, 'upsert', now);
+  });
 }
 
 async function computeRecoverySec(seizureId: string): Promise<number | null> {
@@ -417,11 +496,12 @@ export async function findUnfinishedSeizure(): Promise<UnfinishedSeizure | null>
     last_touched_at: number | null;
   }>(
     `SELECT s.id, s.dog_id, d.name AS dog_name, s.start, s.last_touched_at
-       FROM seizures s
-       LEFT JOIN dogs d ON d.id = s.dog_id
-      WHERE s.status = 'in_progress'
+       FROM seizures_live s
+       LEFT JOIN dogs_live d ON d.id = s.dog_id
+      WHERE s.status = 'in_progress' AND ${ownerScope('s').sql}
       ORDER BY s.start DESC
       LIMIT 1`,
+    ownerScope('s').params,
   );
   if (!row) return null;
   return {
@@ -450,17 +530,20 @@ export async function salvageSeizure(seizure: UnfinishedSeizure): Promise<void> 
     ? Math.round((seizure.startedAtUtc - prev.start) / 1000)
     : null;
 
-  await db.runAsync(
-    `UPDATE seizures
-        SET duration_sec = ?, duration_confidence = ?, end = ?,
-            time_since_prev_sec = ?, status = 'complete',
-            last_touched_at = ?, updated_at = ?
-      WHERE id = ? AND status = 'in_progress'`,
-    [
-      durationSeconds ?? 0, confidence, seizure.lastTouchedAt,
-      timeSincePrevSec, now, now, seizure.id,
-    ],
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE seizures
+          SET duration_sec = ?, duration_confidence = ?, end = ?,
+              time_since_prev_sec = ?, status = 'complete',
+              last_touched_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+      [
+        durationSeconds ?? 0, confidence, seizure.lastTouchedAt,
+        timeSincePrevSec, now, now, seizure.id,
+      ],
+    );
+    await enqueue(db, 'seizures', seizure.id, 'upsert', now);
+  });
 }
 
 /**
@@ -487,11 +570,20 @@ export async function salvageSeizure(seizure: UnfinishedSeizure): Promise<void> 
 export async function discardSeizure(seizureId: string): Promise<void> {
   const db = await getDb();
   const now = Date.now();
-  await db.runAsync(
-    `UPDATE seizures SET status = 'abandoned', last_touched_at = ?, updated_at = ?
-      WHERE id = ? AND status = 'in_progress'`,
-    [now, now, seizureId],
-  );
+
+  // NOT a tombstone. 'abandoned' and deleted_at answer different questions:
+  // the first says the owner threw this capture away, the second says the row
+  // should stop existing everywhere. An abandoned row is still evidence when
+  // diagnosing why the app died, so it syncs as an ordinary row and every
+  // device filters it out of history the same way this one does.
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE seizures SET status = 'abandoned', last_touched_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+      [now, now, seizureId],
+    );
+    await enqueue(db, 'seizures', seizureId, 'upsert', now);
+  });
 }
 
 /**
@@ -539,22 +631,51 @@ export async function updateSeizure(
   sets.push('updated_at = ?');
   values.push(now, id);
 
+  // seizure_edits carries dog_id and user_id of its own now. It is a row that
+  // syncs in its own right, so it needs both to be addressable by an RLS
+  // policy and by the tombstone cascade — it can no longer rely on reaching
+  // its dog through a join at read time.
+  const parent = await db.getFirstAsync<{ dog_id: string; user_id: string | null }>(
+    'SELECT dog_id, user_id FROM seizures WHERE id = ?',
+    [id],
+  );
+  const editId = uid();
+
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      `UPDATE seizures SET ${sets.join(', ')} WHERE id = ?`,
+      `UPDATE seizures SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
       values,
     );
     await db.runAsync(
-      'INSERT INTO seizure_edits (id, seizure_id, edited_at, summary) VALUES (?,?,?,?)',
-      [uid(), id, now, editSummary],
+      `INSERT INTO seizure_edits
+         (id, user_id, dog_id, seizure_id, edited_at, summary, updated_at)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        editId, parent?.user_id ?? newRowOwner(), parent?.dog_id ?? null,
+        id, now, editSummary, now,
+      ],
     );
+    await enqueue(db, 'seizures', id, 'upsert', now);
+    await enqueue(db, 'seizure_edits', editId, 'upsert', now);
   });
 }
 
+/**
+ * Soft-deletes the seizure, its videos and its edit trail.
+ *
+ * The comment this replaces said "videos and edit rows cascade automatically
+ * (see migrations, foreign keys)" — which was true of the hard DELETE it
+ * described and is not true of a tombstone. ON DELETE CASCADE fires on a
+ * DELETE, not on an UPDATE that sets deleted_at, so the cascade had to become
+ * explicit or every deleted seizure would leave its videos live and orphaned
+ * on every other device.
+ *
+ * The video FILES are not touched here. Ask tombstone.collectOrphanedFiles()
+ * for the paths and delete them from the caller — this layer never touches the
+ * filesystem, and the row deletion syncs while the file deletion does not.
+ */
 export async function deleteSeizure(id: string): Promise<void> {
-  const db = await getDb();
-  // Videos and edit rows cascade automatically (see migrations, foreign keys).
-  await db.runAsync('DELETE FROM seizures WHERE id = ?', [id]);
+  await tombstone('seizures', id);
 }
 
 export async function getEditHistory(

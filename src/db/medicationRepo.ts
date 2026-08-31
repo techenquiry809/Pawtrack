@@ -12,6 +12,9 @@
  */
 
 import { getDb, uid, toSqlBool, fromSqlBool } from './client';
+import { newRowOwner, ownerScope } from './scope';
+import { enqueue } from './outbox';
+import { tombstone } from './tombstone';
 import { localDayKey } from '@/utils/time';
 import {
   MedicationDoseSchema,
@@ -105,20 +108,22 @@ export async function listMedications(
   dogId: string,
 ): Promise<MedicationWithReminders[]> {
   const db = await getDb();
+  const owner = ownerScope();
   const meds = await db.getAllAsync<MedRow>(
-    'SELECT * FROM medications WHERE dog_id = ? ORDER BY name COLLATE NOCASE ASC',
-    [dogId],
+    `SELECT * FROM medications_live
+      WHERE dog_id = ? AND ${owner.sql} ORDER BY name COLLATE NOCASE ASC`,
+    [dogId, ...owner.params],
   );
   if (meds.length === 0) return [];
 
   // One query for all reminders rather than one per medication — a dog on
   // four drugs should not cost five round trips to render a list.
   const reminders = await db.getAllAsync<ReminderRow>(
-    `SELECT r.* FROM medication_reminders r
-       JOIN medications m ON m.id = r.medication_id
-      WHERE m.dog_id = ?
+    `SELECT r.* FROM medication_reminders_live r
+       JOIN medications_live m ON m.id = r.medication_id
+      WHERE m.dog_id = ? AND ${ownerScope('r').sql}
       ORDER BY r.time_hhmm ASC`,
-    [dogId],
+    [dogId, ...ownerScope('r').params],
   );
 
   const byMed = new Map<string, MedicationReminder[]>();
@@ -138,14 +143,16 @@ export async function getMedication(
   id: string,
 ): Promise<MedicationWithReminders | null> {
   const db = await getDb();
+  const owner = ownerScope();
   const row = await db.getFirstAsync<MedRow>(
-    'SELECT * FROM medications WHERE id = ?',
-    [id],
+    `SELECT * FROM medications_live WHERE id = ? AND ${owner.sql}`,
+    [id, ...owner.params],
   );
   if (!row) return null;
   const reminders = await db.getAllAsync<ReminderRow>(
-    'SELECT * FROM medication_reminders WHERE medication_id = ? ORDER BY time_hhmm ASC',
-    [id],
+    `SELECT * FROM medication_reminders_live
+      WHERE medication_id = ? AND ${owner.sql} ORDER BY time_hhmm ASC`,
+    [id, ...owner.params],
   );
   return { ...rowToMed(row), reminders: reminders.map(rowToReminder) };
 }
@@ -165,16 +172,20 @@ export async function createMedication(
   MedicationSchema.parse({ ...input, id, createdAt: now, updatedAt: now });
 
   const db = await getDb();
-  await db.runAsync(
-    `INSERT INTO medications
-       (id, dog_id, name, dose, unit, frequency, scheduled_time, prescriber,
-        created_at, updated_at)
-     VALUES (?,?,?,?,?,?,'',?,?,?)`,
-    [
-      id, input.dogId, input.name.trim(), input.dose.trim(), input.unit.trim(),
-      input.frequency.trim(), input.prescriber.trim(), now, now,
-    ],
-  );
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO medications
+         (id, user_id, dog_id, name, dose, unit, frequency, scheduled_time,
+          prescriber, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,'',?,?,?)`,
+      [
+        id, newRowOwner(), input.dogId, input.name.trim(), input.dose.trim(),
+        input.unit.trim(), input.frequency.trim(), input.prescriber.trim(),
+        now, now,
+      ],
+    );
+    await enqueue(db, 'medications', id, 'upsert', now);
+  });
   return id;
 }
 
@@ -197,21 +208,37 @@ export async function updateMedication(
   }
   if (sets.length === 0) return;
 
+  const now = Date.now();
   sets.push('updated_at = ?');
-  values.push(Date.now(), id);
+  values.push(now, id);
 
   const db = await getDb();
-  await db.runAsync(`UPDATE medications SET ${sets.join(', ')} WHERE id = ?`, values);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE medications SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
+      values,
+    );
+    await enqueue(db, 'medications', id, 'upsert', now);
+  });
 }
 
 /**
- * Reminders and dose history cascade automatically. Cancelling the scheduled
- * notifications is the CALLER's job — see medicationService — because this
- * layer must not know about the OS.
+ * Soft-deletes the medication, its reminders and its dose history.
+ *
+ * The cascade is explicit now. It used to say "reminders and dose history
+ * cascade automatically" — true of the DELETE this replaces, and false of a
+ * tombstone: SQLite's ON DELETE CASCADE does not fire on an UPDATE that sets
+ * deleted_at. Left implicit, stopping a drug would have left its reminders
+ * live on every other device, which for an anticonvulsant means alarms for a
+ * dose the dog is no longer prescribed.
+ *
+ * Cancelling the scheduled notifications is still the CALLER's job — see
+ * medicationReminders — because this layer must not know about the OS. Note
+ * that each device cancels its OWN notifications: the handles are device-local
+ * and one phone cannot cancel another's.
  */
 export async function deleteMedication(id: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('DELETE FROM medications WHERE id = ?', [id]);
+  await tombstone('medications', id);
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,12 +249,13 @@ export async function listAllReminders(
   dogId: string,
 ): Promise<MedicationReminder[]> {
   const db = await getDb();
+  const owner = ownerScope('r');
   const rows = await db.getAllAsync<ReminderRow>(
-    `SELECT r.* FROM medication_reminders r
-       JOIN medications m ON m.id = r.medication_id
-      WHERE m.dog_id = ?
+    `SELECT r.* FROM medication_reminders_live r
+       JOIN medications_live m ON m.id = r.medication_id
+      WHERE m.dog_id = ? AND ${owner.sql}
       ORDER BY r.time_hhmm ASC`,
-    [dogId],
+    [dogId, ...owner.params],
   );
   return rows.map(rowToReminder);
 }
@@ -242,11 +270,12 @@ export async function listEnabledReminders(): Promise<
   >(
     `SELECT r.*, m.name AS med_name, m.dose AS dose, m.unit AS unit,
             d.name AS dog_name
-       FROM medication_reminders r
-       JOIN medications m ON m.id = r.medication_id
-       JOIN dogs d        ON d.id = m.dog_id
-      WHERE r.enabled = 1
+       FROM medication_reminders_live r
+       JOIN medications_live m ON m.id = r.medication_id
+       JOIN dogs_live d        ON d.id = m.dog_id
+      WHERE r.enabled = 1 AND ${ownerScope('r').sql}
       ORDER BY r.time_hhmm ASC`,
+    ownerScope('r').params,
   );
   return rows.map((r) => ({
     ...rowToReminder(r),
@@ -275,17 +304,33 @@ export async function addReminder(
 
   const db = await getDb();
   const existing = await db.getFirstAsync<{ id: string }>(
-    'SELECT id FROM medication_reminders WHERE medication_id = ? AND time_hhmm = ?',
+    `SELECT id FROM medication_reminders_live
+      WHERE medication_id = ? AND time_hhmm = ?`,
     [medicationId, timeHHMM],
   );
   if (existing) return null;
 
-  await db.runAsync(
-    `INSERT INTO medication_reminders
-       (id, medication_id, time_hhmm, enabled, notification_id, created_at, updated_at)
-     VALUES (?,?,?,1,NULL,?,?)`,
-    [id, medicationId, timeHHMM, now, now],
+  // dog_id is denormalised onto reminders now, so it is resolved at write time
+  // rather than joined at read time — the tombstone cascade and the server's
+  // row policy both need to reach this row without going through medications.
+  const parent = await db.getFirstAsync<{ dog_id: string; user_id: string | null }>(
+    'SELECT dog_id, user_id FROM medications WHERE id = ?',
+    [medicationId],
   );
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO medication_reminders
+         (id, user_id, dog_id, medication_id, time_hhmm, enabled,
+          notification_id, created_at, updated_at)
+       VALUES (?,?,?,?,?,1,NULL,?,?)`,
+      [
+        id, parent?.user_id ?? newRowOwner(), parent?.dog_id ?? null,
+        medicationId, timeHHMM, now, now,
+      ],
+    );
+    await enqueue(db, 'medication_reminders', id, 'upsert', now);
+  });
   return id;
 }
 
@@ -294,27 +339,47 @@ export async function setReminderEnabled(
   enabled: boolean,
 ): Promise<void> {
   const db = await getDb();
-  await db.runAsync(
-    'UPDATE medication_reminders SET enabled = ?, updated_at = ? WHERE id = ?',
-    [toSqlBool(enabled), Date.now(), reminderId],
-  );
+  const now = Date.now();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE medication_reminders SET enabled = ?, updated_at = ?
+        WHERE id = ? AND deleted_at IS NULL`,
+      [toSqlBool(enabled), now, reminderId],
+    );
+    await enqueue(db, 'medication_reminders', reminderId, 'upsert', now);
+  });
 }
 
-/** Stores the OS handle so this exact notification can be cancelled later. */
+/**
+ * Stores the OS handle so this exact notification can be cancelled later.
+ *
+ * ── THE ONE WRITE IN THIS FILE THAT DELIBERATELY DOES NOT ENQUEUE ─────
+ *
+ * `notification_id` is a handle returned by expo-notifications on THIS device.
+ * Device B cannot cancel device A's handle. If this column synced, an owner
+ * would end up with a medication reminder they could not turn off from the
+ * phone in their hand — the alarm fires from a schedule owned by a device that
+ * may be in a drawer.
+ *
+ * So each device schedules and owns its own notification for a shared reminder
+ * row: `enabled` and `time_hhmm` sync, the handle does not. This function also
+ * leaves `updated_at` alone, because bumping it would make a purely local
+ * bookkeeping write look like a clinical edit and win a conflict against a
+ * real one from another phone.
+ */
 export async function setReminderNotificationId(
   reminderId: string,
   notificationId: string | null,
 ): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    'UPDATE medication_reminders SET notification_id = ?, updated_at = ? WHERE id = ?',
-    [notificationId, Date.now(), reminderId],
+    'UPDATE medication_reminders SET notification_id = ? WHERE id = ?',
+    [notificationId, reminderId],
   );
 }
 
 export async function deleteReminder(reminderId: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('DELETE FROM medication_reminders WHERE id = ?', [reminderId]);
+  await tombstone('medication_reminders', reminderId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -351,20 +416,32 @@ export async function recordDose(input: {
   });
 
   const db = await getDb();
-  await db.runAsync(
-    `INSERT INTO medication_doses
-       (id, medication_id, dog_id, dose_date, scheduled_hhmm, status,
-        recorded_at, note, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(medication_id, dose_date, scheduled_hhmm) DO UPDATE SET
-       status      = excluded.status,
-       recorded_at = excluded.recorded_at,
-       note        = excluded.note`,
-    [
-      uid(), input.medicationId, input.dogId, doseDate, scheduledHHMM,
-      input.status, now, input.note ?? '', now,
-    ],
-  );
+
+  // RETURNING id for the same reason as the check-in upsert: this mints a
+  // fresh uid() but usually UPDATES a row that already has one, and queueing
+  // the generated id would push a row that does not exist. Two phones logging
+  // the same dose slot is ONE dose — the unique index is the constraint, and
+  // the database tells us which row it resolved onto.
+  await db.withTransactionAsync(async () => {
+    const written = await db.getFirstAsync<{ id: string }>(
+      `INSERT INTO medication_doses
+         (id, user_id, medication_id, dog_id, dose_date, scheduled_hhmm, status,
+          recorded_at, note, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(medication_id, dose_date, scheduled_hhmm) DO UPDATE SET
+         status      = excluded.status,
+         recorded_at = excluded.recorded_at,
+         note        = excluded.note,
+         updated_at  = excluded.updated_at,
+         deleted_at  = NULL
+       RETURNING id`,
+      [
+        uid(), newRowOwner(), input.medicationId, input.dogId, doseDate,
+        scheduledHHMM, input.status, now, input.note ?? '', now, now,
+      ],
+    );
+    if (written) await enqueue(db, 'medication_doses', written.id, 'upsert', now);
+  });
 }
 
 export async function listDosesForDate(
@@ -372,11 +449,48 @@ export async function listDosesForDate(
   dayKey: string,
 ): Promise<MedicationDose[]> {
   const db = await getDb();
+  const owner = ownerScope();
   const rows = await db.getAllAsync<DoseRow>(
-    'SELECT * FROM medication_doses WHERE dog_id = ? AND dose_date = ?',
-    [dogId, dayKey],
+    `SELECT * FROM medication_doses_live
+      WHERE dog_id = ? AND dose_date = ? AND ${owner.sql}`,
+    [dogId, dayKey, ...owner.params],
   );
   return rows.map(rowToDose);
+}
+
+/**
+ * Doses across an inclusive span of day keys, with the medication name joined.
+ *
+ * Inclusive at both ends because a day key IS the bucket — there is no midnight
+ * to fall on the wrong side of, unlike the epoch-range seizure query.
+ *
+ * The name has to come from the join: a dose row stores only `medication_id`,
+ * and a report printing an id instead of "Keppra" would be useless to the vet
+ * it is written for.
+ *
+ * LEFT JOIN, unlike `listRecentDoses` above, and the difference matters here.
+ * That function feeds a browsable history where a dose whose medication was
+ * deleted is merely a curiosity. This one feeds a clinical record: the dose was
+ * really given, and dropping it because the drug was later removed from the
+ * list would silently understate adherence on the exact report a vet uses to
+ * judge whether the treatment is being followed.
+ */
+export async function listDosesBetween(
+  dogId: string,
+  fromKey: string,
+  toKey: string,
+): Promise<(MedicationDose & { medicationName: string | null })[]> {
+  const db = await getDb();
+  const owner = ownerScope('d');
+  const rows = await db.getAllAsync<DoseRow & { med_name: string | null }>(
+    `SELECT d.*, m.name AS med_name
+       FROM medication_doses_live d
+       LEFT JOIN medications_live m ON m.id = d.medication_id
+      WHERE d.dog_id = ? AND d.dose_date >= ? AND d.dose_date <= ? AND ${owner.sql}
+      ORDER BY d.dose_date ASC, d.scheduled_hhmm ASC`,
+    [dogId, fromKey, toKey, ...owner.params],
+  );
+  return rows.map((r) => ({ ...rowToDose(r), medicationName: r.med_name }));
 }
 
 /** Dose history joined with medication names, for the merged History view. */
@@ -387,12 +501,12 @@ export async function listRecentDoses(
   const db = await getDb();
   const rows = await db.getAllAsync<DoseRow & { med_name: string }>(
     `SELECT d.*, m.name AS med_name
-       FROM medication_doses d
-       JOIN medications m ON m.id = d.medication_id
-      WHERE d.dog_id = ?
+       FROM medication_doses_live d
+       JOIN medications_live m ON m.id = d.medication_id
+      WHERE d.dog_id = ? AND ${ownerScope('d').sql}
       ORDER BY d.recorded_at DESC
       LIMIT ?`,
-    [dogId, limit],
+    [dogId, ...ownerScope('d').params, limit],
   );
   return rows.map((r) => ({ ...rowToDose(r), medicationName: r.med_name }));
 }

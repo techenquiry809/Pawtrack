@@ -42,8 +42,9 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Heading, Muted, Title } from '@/components/ui';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { goBackOrHome } from '@/utils/nav';
+import { BackButton } from '@/components/BackButton';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import * as dogRepo from '@/db/dogRepo';
 import { Icon } from '@/components/Icon';
@@ -166,6 +167,7 @@ export default function BreedPickerScreen() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top + spacing.md }]}>
       <View style={styles.header}>
+        <BackButton />
         <Title>Choose breed</Title>
         <Muted style={styles.intro}>
           Picking from the list keeps {dog ? `${dog.name}'s` : 'your'} records
@@ -322,6 +324,7 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
+    fontFamily: fontFamily.bold
   },
 
   searchWrap: {
@@ -330,7 +333,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.pill,
+    borderRadius: radius.field,
     backgroundColor: colors.card,
     paddingHorizontal: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
@@ -342,6 +345,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '600',
     color: colors.ink,
+    fontFamily: fontFamily.semibold
   },
 
   row: {
@@ -351,15 +355,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
     marginBottom: 6,
-    borderRadius: radius.sm,
+    borderRadius: radius.card,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
   },
   rowOn: { backgroundColor: colors.teal, borderColor: colors.teal },
-  rowLabel: { fontWeight: '600' },
+  rowLabel: { fontWeight: '600', fontFamily: fontFamily.semibold },
   rowLabelOn: { color: '#fff' },
-  tick: { color: '#fff', fontSize: fontSize.md, fontWeight: '700' },
+  tick: { color: '#fff', fontSize: fontSize.md, fontWeight: '700', fontFamily: fontFamily.bold },
   pressed: { opacity: 0.75 },
 
   empty: { paddingVertical: spacing.lg },
@@ -375,13 +379,14 @@ const styles = StyleSheet.create({
   descriptionInput: {
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: radius.sm,
+    borderRadius: radius.field,
     backgroundColor: colors.bg,
     paddingHorizontal: spacing.md,
     minHeight: MIN_TOUCH_TARGET,
     fontSize: fontSize.md,
     color: colors.ink,
     marginTop: spacing.sm,
+    fontFamily: fontFamily.regular
   },
   error: { color: colors.redDeep, marginTop: spacing.sm },
   provenance: { textAlign: 'center', marginTop: spacing.sm },

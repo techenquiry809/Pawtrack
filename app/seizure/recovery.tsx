@@ -16,9 +16,11 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Card, Disclaimer, Heading, Muted, Title } from '@/components/ui';
-import { colors, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, spacing } from '@/theme/tokens';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
+import { useActiveDog } from '@/store/appStore';
 import { saveActiveSeizure } from '@/services/saveActiveSeizure';
+import { syncAfterSeizure } from '@/services/sync/worker';
 import { formatClock, formatDuration } from '@/utils/time';
 
 /** The finalize gate throws a ZodError carrying our mis-tap message. */
@@ -33,6 +35,7 @@ export default function RecoveryScreen() {
   const insets = useSafeAreaInsets();
 
   const draft = useActiveSeizure((s) => s.draft);
+  const dog = useActiveDog();
   // Two DIFFERENT actions, and the distinction is the whole bug that was here.
   // `clearDraft` lets go of a saved seizure; `discardDraft` throws an unsaved
   // one away and marks the row abandoned. This screen used to use the discard
@@ -43,6 +46,7 @@ export default function RecoveryScreen() {
 
   const [saving, setSaving] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const dogName = dog?.name ?? 'your dog';
   // Guards against a double-tap writing the seizure twice. State would not
   // help here: two taps in the same frame both read the pre-update value.
   const savedRef = useRef(false);
@@ -82,6 +86,13 @@ export default function RecoveryScreen() {
         const { failedVideos } = await saveActiveSeizure(draft, recoveryEndedAt);
         clearDraft();
         router.replace('/(tabs)');
+
+        // The one write worth pushing immediately rather than waiting for the
+        // next foreground. This is the record the whole app exists to keep,
+        // and by the next natural sync the phone could be flat, lost, or in a
+        // waiting room with no signal. Deliberately not awaited: the owner has
+        // just finished a seizure and is not waiting on a network round trip.
+        void syncAfterSeizure();
         if (failedVideos > 0) {
           Alert.alert(
             'Seizure saved',
@@ -145,45 +156,86 @@ export default function RecoveryScreen() {
     >
       <Title>Recovery</Title>
       <Muted style={styles.intro}>
-        The seizure has stopped. This tracks how long it takes to get back to
-        normal — vets find that as useful as the seizure itself.
+        The seizure has stopped. The last thing to record is when {dogName} is
+        back to their normal self — vets find that as useful as the seizure.
       </Muted>
 
-      <View
-        style={styles.timerWrap}
-        accessible
-        accessibilityLabel={`Time since the seizure ended: ${Math.floor(elapsed / 60)} minutes ${elapsed % 60} seconds`}
-        accessibilityLiveRegion="polite"
-      >
-        <Body style={styles.timer}>{formatClock(elapsed)}</Body>
-        <Muted style={styles.timerCaption}>since the seizure ended</Muted>
-      </View>
+      {/*
+        ── WHY THE TWO NUMBERS ARE PAIRED AND LABELLED ──────────────────
 
-      <Card style={{ marginTop: spacing.lg }}>
-        <Heading>This seizure</Heading>
-        <Muted style={{ marginTop: 6 }}>
-          Lasted {formatDuration(seizureDurationSec)}
-          {draft.pendingVideos.length > 0 &&
-            ` · ${draft.pendingVideos.length} video${draft.pendingVideos.length === 1 ? '' : 's'}`}
-        </Muted>
+        This screen used to show a large bare "00:07" above a card reading
+        "Lasted 19s", with nothing tying them together. Two elapsed times, both
+        in the same units, neither saying which was which — and the big one was
+        the one that had NOT finished. Owners read the prominent number as the
+        seizure length, which is the single most important figure in the app to
+        get wrong.
+
+        Side by side, each under its own label, the comparison is the point:
+        one is finished, one is still running.
+      */}
+      <Card style={styles.stats}>
+        <View style={styles.stat}>
+          <Muted style={styles.statLabel}>Seizure lasted</Muted>
+          <Body style={styles.statValue}>{formatDuration(seizureDurationSec)}</Body>
+        </View>
+        <View style={styles.statDivider} />
+        <View
+          style={styles.stat}
+          accessible
+          accessibilityLabel={`Recovering for ${Math.floor(elapsed / 60)} minutes ${elapsed % 60} seconds`}
+          accessibilityLiveRegion="polite"
+        >
+          <Muted style={styles.statLabel}>Recovering for</Muted>
+          <Body style={[styles.statValue, styles.statLive]}>{formatClock(elapsed)}</Body>
+        </View>
       </Card>
 
+      {draft.pendingVideos.length > 0 ? (
+        <Muted style={styles.videoNote}>
+          {draft.pendingVideos.length} video
+          {draft.pendingVideos.length === 1 ? '' : 's'} will be saved with this record.
+        </Muted>
+      ) : null}
+
+      {/* The screen asks one question, and the two buttons are its two
+          answers. Previously the buttons were "Back to normal" and "Save and
+          finish later" — a statement and an instruction, neither of which said
+          what pressing it would do. */}
+      <Heading style={styles.question}>Is {dogName} back to normal?</Heading>
+
       <Button
-        label="Back to normal"
+        label="Yes, back to normal now"
         large
         loading={saving}
         onPress={() => void finish(Date.now())}
-        accessibilityHint="Records the recovery time and saves this seizure"
-        style={{ marginTop: spacing.lg }}
+        accessibilityHint="Records how long recovery took and saves this seizure"
+        style={styles.primary}
       />
       <Button
-        label="Save and finish later"
+        label="Not yet, I'll add this later"
         variant="ghost"
         disabled={saving}
         onPress={() => void finish(null)}
-        accessibilityHint="Saves this seizure without a recovery time. You can add it later from History."
-        style={{ marginTop: spacing.sm }}
+        accessibilityHint="Saves this seizure now without a recovery time. You can add it later from History."
+        style={styles.secondary}
       />
+
+      {/*
+        The reassurance is the fix for the real fear this screen created: an
+        owner who could not tell whether leaving would lose the seizure they
+        had just lived through. Both buttons save. Saying so is what makes
+        "not yet" a usable answer instead of a risk.
+      */}
+      <View style={styles.assure}>
+        <Muted style={styles.assureLine}>
+          The seizure is saved either way. This step only adds how long recovery
+          took.
+        </Muted>
+        <Muted style={styles.assureLine}>
+          You can close the app and come back — the timer counts from when the
+          seizure ended, not from when this screen opened.
+        </Muted>
+      </View>
 
       <Disclaimer>
         If your dog has not returned to normal, or you are worried about how
@@ -199,13 +251,38 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.lg },
   intro: { marginTop: spacing.sm },
 
+  stats: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginTop: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  stat: { flex: 1, alignItems: 'center', gap: 2 },
+  statLabel: { fontSize: fontSize.sm, textAlign: 'center' },
+  statValue: {
+    fontSize: fontSize.lg,
+    color: colors.ink,
+    fontFamily: fontFamily.bold,
+    fontVariant: ['tabular-nums'],
+  },
+  /** The running one, tinted so the eye can tell it apart at a glance. */
+  statLive: { color: colors.tealDeep },
+  statDivider: { width: 1, backgroundColor: colors.line, marginHorizontal: spacing.sm },
+  videoNote: { marginTop: spacing.sm, textAlign: 'center' },
+  question: { marginTop: spacing.xl, textAlign: 'center' },
+  primary: { marginTop: spacing.md },
+  secondary: { marginTop: spacing.sm },
+  assure: { marginTop: spacing.md, gap: spacing.xs },
+  assureLine: { fontSize: fontSize.sm, textAlign: 'center' },
+
   timerWrap: { alignItems: 'center', marginTop: spacing.xl },
   timer: {
-    fontSize: 56,
+    fontSize: fontSize.timerMd,
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'],
     letterSpacing: -1,
+    fontFamily: fontFamily.bold
   },
   timerCaption: { marginTop: 4 },
 });

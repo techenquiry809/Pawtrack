@@ -104,10 +104,53 @@ export const eventColors = {
 
 export type EventKind = keyof typeof eventColors;
 
+/**
+ * Corner radii.
+ *
+ * ── THE SHAPE LANGUAGE ────────────────────────────────────────────────
+ *
+ *   sm    every INTERACTIVE control — buttons, chips, segmented controls,
+ *         inputs, the tab bar's active chip. This is shadcn's rounded-lg,
+ *         and it is what makes a tap target recognisable as one.
+ *   md    cards and panels — a surface that HOLDS controls.
+ *   lg    large containers: sheets, modals, the alert banner.
+ *   pill  status BADGES and avatars only. A badge is a label, not a
+ *         control, and the fully-round shape is what says so. Using it on
+ *         a button was the old inconsistency: it made a control look like
+ *         a badge and a badge look like a control.
+ *
+ * ── WHAT IS DELIBERATELY NOT A TOKEN ──────────────────────────────────
+ *
+ * Half-of-dimension radii stay as raw numbers, because they are not style
+ * choices — they are the arithmetic that makes a shape a circle. A 14pt
+ * legend swatch at radius 7, an 8pt progress rail at radius 4, a 4pt spark
+ * bar at radius 2: snapping any of those to a token would turn a circle
+ * into a rounded rectangle. They are computed values that happen to be
+ * small, not magic numbers.
+ */
 export const radius = {
-  sm: 12,
-  md: 18,
-  lg: 24,
+  /**
+   * Interactive controls — buttons, chips, segmented controls, the tab chip.
+   *
+   * Fully round, and that is the whole point: a pill reads as soft and
+   * touchable where a 12pt rectangle reads as a form field on a government
+   * website. This app is about somebody's dog.
+   */
+  control: 100,
+  /**
+   * Text fields. Round, but deliberately NOT a pill.
+   *
+   * A pill works on a control whose height is fixed. A note field grows to
+   * four lines, and a 100pt radius on a 90pt-tall box collapses into a
+   * lozenge with unusable corners — the text starts halfway across the first
+   * line. This is the one place where softness has to yield.
+   */
+  field: 20,
+  /** Cards and panels — a surface that HOLDS controls. */
+  card: 24,
+  /** Sheets, modals and full-width banners. */
+  sheet: 28,
+  /** Status badges and avatars. Same value as `control`, different meaning. */
   pill: 100,
 } as const;
 
@@ -138,6 +181,30 @@ export const shadow = {
     shadowOffset: { width: 0, height: 10 },
     elevation: 6,
   },
+  /**
+   * The lift under a filled or outlined Button.
+   *
+   * Much tighter than `card`: a button sits ON a card, so it needs to read as
+   * a separate surface without implying it floats as far off the page as the
+   * card does. A 1pt offset with a 2pt blur is the smallest shadow that still
+   * survives Android's elevation rounding.
+   */
+  /**
+   * The lift under a control.
+   *
+   * Warm, not black. A pure-black shadow on a cream background reads as grey
+   * grime collecting under the button; tinting it with the ink colour (which
+   * is itself a warm navy) keeps the whole surface in one temperature. Soft
+   * and wide rather than tight and dark — the difference between something
+   * moulded and something stamped.
+   */
+  button: {
+    shadowColor: '#20293A',
+    shadowOpacity: 0.10,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
 } as const;
 
 /**
@@ -145,6 +212,54 @@ export const shadow = {
  * OS text-size setting because we do NOT set `allowFontScaling={false}`
  * anywhere. Accessibility was an explicit requirement of this app.
  */
+/**
+* Nunito — rounded terminals, warm and friendly.
+ *
+ * Replaces Inter, which was correct for matching the shadcn reference and
+ * wrong for this app: Inter is engineered to be NEUTRAL, and neutral is the
+ * one thing a dog-care app should not feel. Nunito's rounded terminals do the
+ * cheerful work that the corner radii alone could not.
+ *
+ * Nunito over the rounder alternatives (Quicksand, Baloo) because it carries
+ * the full 200-1000 weight range — the 11pt tab labels and the red seizure
+ * timer both need real weight to stay legible, and a display face that caps at
+ * 700 with thin strokes would trade legibility for charm on exactly the
+ * screens where legibility matters most.
+ *
+ * ── WHY EACH WEIGHT IS A SEPARATE FAMILY ──────────────────────────────
+ *
+ * These are STATIC faces, so `fontWeight` alone will not select between them.
+ * iOS may fake it by synthesising a bolder outline; Android silently ignores
+ * the weight and renders everything at 400. The only portable way to get a
+ * real 600 is to name the 600 face.
+ *
+ * So every text style sets BOTH: `fontFamily` picks the actual face, and
+ * `fontWeight` stays alongside it so the system still knows the semantic
+ * weight — screen readers and text-selection UI read it, and it keeps the
+ * styles legible next to the shadcn classes they came from.
+ *
+ * `weightFamily` is the mapping, so a style can be written from a weight
+ * without anyone memorising Google's face names.
+ */
+export const fontFamily = {
+  regular: 'Nunito_400Regular',
+  medium: 'Nunito_500Medium',
+  semibold: 'Nunito_600SemiBold',
+  bold: 'Nunito_700Bold',
+  extrabold: 'Nunito_800ExtraBold',
+} as const;
+
+export const weightFamily = {
+  '400': fontFamily.regular,
+  normal: fontFamily.regular,
+  '500': fontFamily.medium,
+  '600': fontFamily.semibold,
+  '700': fontFamily.bold,
+  bold: fontFamily.bold,
+  '800': fontFamily.extrabold,
+  '900': fontFamily.extrabold,
+} as const;
+
 export const fontSize = {
   xs: 11,
   sm: 12.5,
@@ -153,7 +268,17 @@ export const fontSize = {
   lg: 20,
   xl: 26,
   display: 30,
-  timer: 46,
+  /**
+   * Elapsed time, which had drifted to FOUR sizes across four screens
+   * (38 via `timer - 8`, 40, 56, 68) for one semantic thing. Three tiers,
+   * named for the job rather than the screen:
+   */
+  /** A finished seizure's duration, read at a glance in a list or header. */
+  timerSm: 40,
+  /** The recovery countdown — important, but not the only thing on screen. */
+  timerMd: 56,
+  /** The live timer. The largest type in the app, and deliberately so. */
+  timerLg: 68,
 } as const;
 
 /**

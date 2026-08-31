@@ -8,6 +8,9 @@
  */
 
 import { getDb, uid, toSqlJson, fromSqlObject } from './client';
+import { newRowOwner, ownerScope } from './scope';
+import { enqueue } from './outbox';
+import { tombstone } from './tombstone';
 import type {
   Breed,
   Dog,
@@ -72,17 +75,35 @@ function rowToDog(row: DogRow): Dog {
   };
 }
 
+/**
+ * Every read below goes through `dogs_live`, not `dogs`.
+ *
+ * The view bakes in `deleted_at IS NULL` so a tombstoned dog cannot come back
+ * through a query someone forgot to filter. The owner fence has to be added
+ * per query because it is parameterised — `ownerScope()` never returns an
+ * empty string, so leaving it out is a syntax error rather than a silent leak
+ * of another account's records.
+ *
+ * The sync layer is the one caller that reads the BASE table, because it is
+ * the one caller that legitimately needs to see tombstones.
+ */
 export async function listDogs(): Promise<Dog[]> {
   const db = await getDb();
+  const owner = ownerScope();
   const rows = await db.getAllAsync<DogRow>(
-    'SELECT * FROM dogs ORDER BY created_at ASC',
+    `SELECT * FROM dogs_live WHERE ${owner.sql} ORDER BY created_at ASC`,
+    owner.params,
   );
   return rows.map(rowToDog);
 }
 
 export async function getDog(id: string): Promise<Dog | null> {
   const db = await getDb();
-  const row = await db.getFirstAsync<DogRow>('SELECT * FROM dogs WHERE id = ?', [id]);
+  const owner = ownerScope();
+  const row = await db.getFirstAsync<DogRow>(
+    `SELECT * FROM dogs_live WHERE id = ? AND ${owner.sql}`,
+    [id, ...owner.params],
+  );
   return row ? rowToDog(row) : null;
 }
 
@@ -100,22 +121,29 @@ export async function createDog(input: NewDogInput): Promise<string> {
     breedId: null, breedName: '', breedSource: '', userEnteredDescription: '',
   };
 
-  await db.runAsync(
-    `INSERT INTO dogs (
-      id, name, breed_id, breed_name, breed_source, breed_user_desc,
-      sex, age_years, weight_kg, dob, diagnosis_status,
-      first_seizure_date, seizure_type, allergies, diet,
-      vet_json, emergency_vet_json, emergency_plan_json,
-      created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [
-      id, input.name, breed.breedId, breed.breedName, breed.breedSource,
-      breed.userEnteredDescription, '', input.ageYears ?? null, null, '',
-      'undiagnosed', '', '', '', '',
-      toSqlJson(EMPTY_CONTACT), toSqlJson(EMPTY_CONTACT), toSqlJson(EMPTY_PLAN),
-      now, now,
-    ],
-  );
+  // The row write and its outbox entry share one transaction. If a crash
+  // could land between them the row would exist on this phone with nothing
+  // recording that it needs pushing — a dog that never reaches the account.
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO dogs (
+        id, user_id, name, breed_id, breed_name, breed_source, breed_user_desc,
+        sex, age_years, weight_kg, dob, diagnosis_status,
+        first_seizure_date, seizure_type, allergies, diet,
+        vet_json, emergency_vet_json, emergency_plan_json,
+        created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        id, newRowOwner(), input.name, breed.breedId, breed.breedName,
+        breed.breedSource, breed.userEnteredDescription, '',
+        input.ageYears ?? null, null, '',
+        'undiagnosed', '', '', '', '',
+        toSqlJson(EMPTY_CONTACT), toSqlJson(EMPTY_CONTACT), toSqlJson(EMPTY_PLAN),
+        now, now,
+      ],
+    );
+    await enqueue(db, 'dogs', id, 'upsert', now);
+  });
   return id;
 }
 
@@ -155,19 +183,42 @@ export async function updateDog(
 
   if (sets.length === 0) return;
 
-  push('updated_at', Date.now());
+  const now = Date.now();
+  push('updated_at', now);
   values.push(id);
-  await db.runAsync(`UPDATE dogs SET ${sets.join(', ')} WHERE id = ?`, values);
+
+  const owner = ownerScope();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE dogs SET ${sets.join(', ')}
+        WHERE id = ? AND deleted_at IS NULL AND ${owner.sql}`,
+      [...values, ...owner.params],
+    );
+    await enqueue(db, 'dogs', id, 'upsert', now);
+  });
 }
 
 /**
- * Deletes the dog and — via ON DELETE CASCADE — every seizure, video row,
- * medication and check-in belonging to them. Video FILES on disk must be
- * cleaned up separately by the caller.
+ * Soft-deletes the dog and everything beneath them.
+ *
+ * ── WHAT CHANGED, AND WHY THE COMMENT ABOVE THIS USED TO BE WRONG ─────
+ *
+ * This was a hard DELETE that leaned on ON DELETE CASCADE to remove every
+ * seizure, video row, medication and check-in. Foreign keys fire on a DELETE.
+ * They do not fire on the UPDATE that a replicable delete has to be — so the
+ * moment deletes went soft, that cascade silently stopped happening and would
+ * have left an entire dog's history live but unreachable, then pushed it to
+ * every other device as orphans.
+ *
+ * tombstone() walks the subtree explicitly instead, in one transaction, and
+ * queues every row it marks. See src/db/tombstone.ts.
+ *
+ * Video FILES on disk are still the caller's job — this layer never touches
+ * the filesystem. Note the asymmetry that is deliberate: the row deletion
+ * syncs, the file deletion does not.
  */
 export async function deleteDog(id: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('DELETE FROM dogs WHERE id = ?', [id]);
+  await tombstone('dogs', id);
 }
 
 /** Display helper shared by Home, History and the vet report. */

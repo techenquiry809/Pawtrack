@@ -24,7 +24,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import {
   Body, Button, Card, EmptyState, Heading, Muted, Pill, type PillTone,
 } from '@/components/ui';
-import { colors, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { Icon } from '@/components/Icon';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as reminders from '@/services/medicationReminders';
@@ -343,6 +343,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontVariant: ['tabular-nums'],
     minWidth: 56,
+    fontFamily: fontFamily.bold
   },
 
   dosesBlock: {
@@ -357,6 +358,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.1,
     color: colors.inkSoft,
     marginBottom: 6,
+    fontFamily: fontFamily.bold
   },
   doseRow: {
     flexDirection: 'row',
@@ -369,6 +371,7 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     fontVariant: ['tabular-nums'],
     minWidth: 56,
+    fontFamily: fontFamily.regular
   },
   doseButtons: { flexDirection: 'row', gap: 6, flex: 1, justifyContent: 'flex-end' },
   doseBtn: {
@@ -376,12 +379,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: radius.pill,
+    borderRadius: radius.control,
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.bg,
   },
-  doseBtnLabel: { fontSize: fontSize.sm, fontWeight: '700', color: colors.ink },
+  doseBtnLabel: { fontSize: fontSize.sm, fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
   doseRecorded: {
     flex: 1,
     flexDirection: 'row',
@@ -390,7 +393,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   changeBtn: { minHeight: 38, justifyContent: 'center', paddingHorizontal: 8 },
-  changeLabel: { color: colors.tealDeep, fontWeight: '700' },
+  changeLabel: { color: colors.tealDeep, fontWeight: '700', fontFamily: fontFamily.bold },
   missedNote: { marginTop: spacing.sm },
 
   footNote: { textAlign: 'center', marginTop: spacing.md },

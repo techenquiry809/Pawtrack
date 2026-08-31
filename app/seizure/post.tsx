@@ -28,20 +28,23 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, Card, Muted, Pill } from '@/components/ui';
-import { ActionBar, ScreenHeader, SectionRule, StepTrail } from '@/components/form';
+import { Card, Muted, Pill } from '@/components/ui';
+import { StepShell } from '@/components/StepShell';
 import {
-  AftermathFields,
+  NotesField,
+  PostBehaviorField,
+  PreIctalField,
+  SeverityField,
   type MultiField,
   type ObservationValue,
   type SingleField,
   type TextField,
 } from '@/components/ObservationFields';
-import { colors, fontSize, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, spacing } from '@/theme/tokens';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 import { useActiveDog } from '@/store/appStore';
 import * as seizureRepo from '@/db/seizureRepo';
@@ -61,6 +64,8 @@ export default function PostSeizureScreen() {
   const beginRecovery = useActiveSeizure((s) => s.beginRecovery);
 
   const [sincePrevSec, setSincePrevSec] = useState<number | null>(null);
+  const [step, setStep] = useState(0);
+  const dogName = dog?.name ?? 'your dog';
 
   const dogId = draft?.dogId;
   const startedAt = draft?.startedAt;
@@ -138,79 +143,99 @@ export default function PostSeizureScreen() {
     (value.preIctalNote ? 1 : 0) +
     (value.notes ? 1 : 0);
 
-  return (
-    <View style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingTop: insets.top + spacing.md },
-        ]}
-        keyboardShouldPersistTaps="handled"
-      >
-        <ScreenHeader
-          eyebrow="Step 2 of 3"
-          title="Right after the seizure"
-          subtitle="Every question here is optional, and you can change any answer later."
-        />
-        <StepTrail steps={STEPS} current={1} />
+  /**
+   * The four aftermath questions, one per step.
+   *
+   * They were one scroll. The header comment above records why the commit
+   * action was pinned and why the phases were named — both true fixes, and
+   * both left the same wall of chip groups in place. An owner five minutes
+   * past a seizure was still shown four groups at once with no sense of how
+   * much was expected, and the honest answer (none of it) was the one thing
+   * the layout could not say.
+   *
+   * Splitting them removes nothing. Every field is still optional, still
+   * editable later, and the owner can still leave at any point.
+   */
+  const STEP_DEFS = [
+    { title: `How is ${dogName} behaving now?`, hint: 'Tap anything you can see. Skip if you are not sure.' },
+    { title: 'Anything unusual beforehand?', hint: 'Warning signs in the minutes or hours before it started.' },
+    { title: 'How did it look to you?', hint: 'Your own impression, not a clinical grade.' },
+    { title: 'Anything to remember', hint: 'For yourself, or for your vet.' },
+  ] as const;
 
-        {/* --- What has already been captured ----------------------- */}
-        <SectionRule label="Already recorded" />
-        <Card>
+  return (
+    <StepShell
+      steps={STEP_DEFS}
+      current={step}
+      subtitle={`Seizure · ${formatDuration(durationSec)}`}
+      onBack={() => setStep(step - 1)}
+      onNext={() => setStep(step + 1)}
+      onClose={onContinue}
+      finishLabel="Continue to recovery"
+      onFinish={onContinue}
+    >
+      {/* The record so far, on the first step only. It reassures the owner
+          that the timing is already safe before any question is asked, and
+          repeating it on every step would be noise. */}
+      {step === 0 ? (
+        <Card style={styles.alreadyCard}>
           <View style={styles.durationRow}>
-            <Text style={styles.durationValue}>
-              {formatDuration(durationSec)}
-            </Text>
+            <Text style={styles.durationValue}>{formatDuration(durationSec)}</Text>
             <Pill label="Timed in app" tone="teal" />
           </View>
-
           <View style={styles.timeline}>
             <TimeMark label="Started" epochMs={draft.startedAt} />
             <View style={styles.timelineLine} />
             <TimeMark label="Ended" epochMs={draft.endedAt} />
           </View>
-
           {sincePrevSec !== null ? (
             <Muted style={styles.since}>
               {formatInterval(sincePrevSec)} since the previous recorded seizure.
             </Muted>
           ) : (
             <Muted style={styles.since}>
-              This is the first seizure recorded for {dog?.name ?? 'your dog'}.
+              This is the first seizure recorded for {dogName}.
             </Muted>
           )}
-
           {draft.pendingVideos.length > 0 ? (
             <Muted style={styles.since}>
               {draft.pendingVideos.length} video
-              {draft.pendingVideos.length === 1 ? '' : 's'} will be saved with
-              this record.
+              {draft.pendingVideos.length === 1 ? '' : 's'} will be saved with this record.
             </Muted>
           ) : null}
         </Card>
+      ) : null}
 
-        {/* --- The questions ---------------------------------------- */}
-        <AftermathFields
-          value={value}
-          on={handlers}
-          dogName={dog?.name ?? 'your dog'}
-        />
-      </ScrollView>
+      {step === 0 && (
+        <PostBehaviorField value={value} on={handlers} />
+      )}
 
-      <ActionBar bottomInset={insets.bottom}>
-        <Button
-          label="Continue to recovery"
-          large
-          onPress={onContinue}
-          accessibilityHint="Starts tracking how long your dog takes to return to normal"
-        />
-        <Muted style={styles.footNote}>
-          {answered === 0
-            ? 'You can skip all of this — nothing here is required.'
-            : `${answered} answer${answered === 1 ? '' : 's'} so far. Nothing is saved until the next step.`}
-        </Muted>
-      </ActionBar>
-    </View>
+      {step === 1 && (
+        <>
+          <PreIctalField value={value} on={handlers} />
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <SeverityField value={value} on={handlers} />
+          <Muted style={styles.since}>
+            Your vet reads this alongside the timing and the video.
+          </Muted>
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <NotesField value={value} on={handlers} />
+          <Muted style={styles.since}>
+            {answered === 0
+              ? 'You can skip all of this — nothing here is required.'
+              : `${answered} answer${answered === 1 ? '' : 's'} so far. Nothing is saved until the next step.`}
+          </Muted>
+        </>
+      )}
+    </StepShell>
   );
 }
 
@@ -239,6 +264,7 @@ function TimeMark({ label, epochMs }: { label: string; epochMs: number | null })
 }
 
 const styles = StyleSheet.create({
+  alreadyCard: { marginBottom: spacing.md },
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
 
@@ -254,6 +280,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     letterSpacing: -0.6,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.extrabold
   },
 
   timeline: {
@@ -274,12 +301,14 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
     color: colors.inkSoft,
+    fontFamily: fontFamily.extrabold
   },
   markValue: {
     fontSize: fontSize.base,
     fontWeight: '700',
     color: colors.ink,
     fontVariant: ['tabular-nums'],
+    fontFamily: fontFamily.bold
   },
 
   since: { marginTop: spacing.md },
