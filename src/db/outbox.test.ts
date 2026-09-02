@@ -42,7 +42,9 @@ function freshDb(): DatabaseSync {
       op          TEXT NOT NULL CHECK (op IN ('upsert','delete')),
       queued_at   INTEGER NOT NULL,
       attempts    INTEGER NOT NULL DEFAULT 0,
-      last_error  TEXT
+      last_error  TEXT,
+      -- Migration 12. Nullable: NULL means "never attempted".
+      last_attempt_at INTEGER
     );
     CREATE UNIQUE INDEX idx_outbox_row ON outbox(table_name, row_id);
 
@@ -326,5 +328,63 @@ test('a tombstone moves updated_at, or it loses last-write-wins', () => {
     'a tombstone keeping its old updated_at would lose to any concurrent ' +
       'edit made on another device before the delete',
   );
+  db.close();
+});
+
+
+/* ------------------------------------------------------------------ */
+/* The retry window, at the SQL layer                                  */
+/* ------------------------------------------------------------------ */
+
+test('recordFailure stamps a time, so the window has something to measure', () => {
+  // The gap this closes: `attempts` alone cannot answer "may this be retried
+  // yet". Without the timestamp the column was write-only for eleven
+  // migrations.
+  const db = freshDb();
+  db.prepare(
+    `INSERT INTO outbox (table_name, row_id, op, queued_at) VALUES (?,?,?,?)`,
+  ).run('seizures', 's1', 'upsert', 1000);
+
+  const before = db.prepare('SELECT attempts, last_attempt_at FROM outbox').get() as {
+    attempts: number; last_attempt_at: number | null;
+  };
+  assert.equal(before.attempts, 0);
+  assert.equal(before.last_attempt_at, null);
+
+  // What recordFailure does, in the same statement shape.
+  db.prepare(
+    `UPDATE outbox SET attempts = attempts + 1, last_error = ?, last_attempt_at = ?
+      WHERE id = 1`,
+  ).run('boom', 5000);
+
+  const after = db.prepare('SELECT attempts, last_attempt_at FROM outbox').get() as {
+    attempts: number; last_attempt_at: number | null;
+  };
+  assert.equal(after.attempts, 1);
+  assert.equal(after.last_attempt_at, 5000);
+  db.close();
+});
+
+test('a failing entry keeps its place in the queue while it backs off', () => {
+  // It must be SKIPPED, never dropped and never reordered: the id order is
+  // FK order, so a parent that backs off must not let its child overtake it.
+  const db = freshDb();
+  const ins = db.prepare(
+    `INSERT INTO outbox (table_name, row_id, op, queued_at, attempts, last_attempt_at)
+     VALUES (?,?,?,?,?,?)`,
+  );
+  ins.run('dogs', 'd1', 'upsert', 1000, 4, 10_000);
+  ins.run('seizures', 's1', 'upsert', 1000, 0, null);
+
+  const rows = db.prepare('SELECT id, row_id, attempts, last_attempt_at FROM outbox ORDER BY id').all() as {
+    id: number; row_id: string; attempts: number; last_attempt_at: number | null;
+  }[];
+  assert.equal(rows.length, 2, 'nothing is deleted by failing');
+  assert.equal(rows[0]?.row_id, 'd1', 'order is preserved');
+
+  // Both rows are still present for the JS-side filter to judge; the row that
+  // is backing off is excluded from the batch, not from the table.
+  assert.equal(rows[0]?.attempts, 4);
+  assert.equal(rows[1]?.attempts, 0);
   db.close();
 });

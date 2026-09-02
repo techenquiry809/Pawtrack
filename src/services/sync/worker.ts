@@ -71,10 +71,6 @@ export function resumeSync(): void {
   suspended = false;
 }
 
-export function isSyncSuspended(): boolean {
-  return suspended;
-}
-
 /**
  * Push, then pull, then reconcile local files.
  *
@@ -222,8 +218,4 @@ export function startSyncTriggers(): () => void {
 export async function syncAfterSeizure(): Promise<void> {
   resumeSync();
   void syncNow('seizure-finalized');
-}
-
-export function syncFailureCount(): number {
-  return consecutiveFailures;
 }

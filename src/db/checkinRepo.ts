@@ -288,11 +288,3 @@ function middayOf(dayKey: string): number {
   const [y, m, d] = dayKey.split('-').map(Number);
   return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12, 0, 0, 0).getTime();
 }
-
-/** Convenience wrapper for the common case. */
-export async function upsertTodaysCheckin(
-  dogId: string,
-  input: CheckinInput,
-): Promise<void> {
-  return upsertCheckinForDate(dogId, localDayKey(), input);
-}

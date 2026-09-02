@@ -311,15 +311,6 @@ export async function importVideosFromFiles(
 }
 
 /**
- * Back-compat wrapper for the single-pick call sites that predate multi-select.
- * New code should call importVideos().
- */
-export async function pickExistingVideo(): Promise<CapturedVideo | null> {
-  const [first] = await importVideos({ multiple: false });
-  return first ?? null;
-}
-
-/**
  * Deletes a video file from disk. Call this AFTER removing the DB row, and
  * never let a failure here block the user — an orphaned file is a minor
  * annoyance, a crash mid-edit is not.

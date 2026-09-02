@@ -25,7 +25,7 @@ import { Body, Button, Card, EmptyState, Muted, Pill } from '@/components/ui';
 import { VideoTile } from '@/components/VideoTile';
 import { colors, fontFamily, fontSize, spacing } from '@/theme/tokens';
 import { dayLabel } from '@/features/timeline';
-import { formatDuration, startOfDay } from '@/utils/time';
+import { formatDuration, formatShortDate, hasKnownTime, startOfDay, timeOfDay } from '@/utils/time';
 import type { GalleryEntry } from '@/types/domain';
 import { deviceNames } from '@/services/sync/devices';
 
@@ -105,7 +105,18 @@ export function VideoGallery({
    */
   const [openId, setOpenId] = useState<string | null>(null);
   useEffect(() => {
-    void deviceNames().then(setNames);
+    // Guarded and caught. `deviceNames()` reads the device registry, so it can
+    // reject, and it can resolve after the gallery has been navigated away
+    // from — the tile falls back to "another device" either way.
+    let cancelled = false;
+    void deviceNames()
+      .then((names) => {
+        if (!cancelled) setNames(names);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -144,10 +155,14 @@ export function VideoGallery({
                     : null
                 }
                 captureConfidence={entry.video.captureConfidence}
-                caption={new Date(entry.video.timestamp).toLocaleTimeString(
-                  undefined,
-                  { hour: 'numeric', minute: '2-digit' },
-                )}
+                // undefined, not a formatted midnight, when the clip carries
+                // no filming time — the tile then shows no caption at all.
+                caption={
+                  timeOfDay(
+                    entry.video.timestamp,
+                    hasKnownTime(entry.seizureTimingConfidence),
+                  ) ?? undefined
+                }
                 accessibilityLabel={describe(entry)}
                 onPress={() => router.push(`/video/${entry.video.id}`)}
               />
@@ -267,7 +282,6 @@ export function GalleryHeader({
  */
 function VideoDetails({ entry }: { entry: GalleryEntry }) {
   const v = entry.video;
-  const when = new Date(v.timestamp);
   const notes: { label: string; text: string }[] = [
     { label: 'Before', text: v.preNote },
     { label: 'During', text: v.ictalNote },
@@ -279,9 +293,12 @@ function VideoDetails({ entry }: { entry: GalleryEntry }) {
     <Card style={styles.details}>
       <View style={styles.detailsHead}>
         <Body style={styles.detailsWhen}>
-          {when.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-          {', '}
-          {when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+          {[
+            formatShortDate(v.timestamp),
+            timeOfDay(v.timestamp, hasKnownTime(entry.seizureTimingConfidence)),
+          ]
+            .filter(Boolean)
+            .join(', ')}
         </Body>
         <Pill
           label={v.durationSec ? formatDuration(v.durationSec) : 'Length unknown'}

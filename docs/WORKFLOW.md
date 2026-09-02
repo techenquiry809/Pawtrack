@@ -23,7 +23,7 @@ install did not complete — restart your terminal first, then reinstall.
 ### Step 2. Go to the project folder
 
 ```bash
-cd path/to/paws-journal-rn
+cd path/to/pawtrack-rn
 ```
 
 Replace `path/to/` with wherever you unzipped it. On a Mac, you can type `cd `

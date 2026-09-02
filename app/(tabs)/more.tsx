@@ -416,7 +416,7 @@ export default function MoreScreen() {
       </Card>
 
       <Disclaimer>
-        Paws Journal helps you record and organise information for your dog&apos;s
+        PawTrack helps you record and organise information for your dog&apos;s
         care. It does not diagnose or treat seizures. If your dog is having a
         prolonged or repeated seizure, follow your veterinarian&apos;s emergency
         plan and seek veterinary care.

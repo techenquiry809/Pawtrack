@@ -76,7 +76,7 @@ export function ProfileHeader({
       style={({ pressed }) => [styles.header, pressed && styles.pressed]}
     >
       <View style={styles.headerText}>
-        <Text style={styles.eyebrow}>PAWS JOURNAL</Text>
+        <Text style={styles.eyebrow}>PAWTRACK</Text>
         <Text style={styles.name} numberOfLines={1}>
           {dog.name}
         </Text>

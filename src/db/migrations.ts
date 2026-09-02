@@ -743,6 +743,42 @@ const migrations: Migration[] = [
       `);
     },
   },
+
+  {
+    version: 12,
+    name: 'outbox retry backoff needs a last-attempt timestamp',
+    up: async (db) => {
+      /**
+       * When the last push of this entry was attempted.
+       *
+       * ── WHY THE `attempts` COLUMN WAS NOT ENOUGH ──────────────────────
+       *
+       * `attempts` has been incremented by recordFailure since migration 1,
+       * and `backoffMs()` has existed to turn it into a delay — but nothing
+       * ever read them together, because there was no way to know WHEN the
+       * last attempt happened. A count on its own cannot answer "may this be
+       * retried yet", so every trigger re-sent the same failing batch at full
+       * rate.
+       *
+       * NULL means "never attempted", which is the correct state for a freshly
+       * queued row and is why the column is nullable rather than defaulted to
+       * 0 — a default of 0 would read as "attempted at the epoch", i.e. always
+       * due, which is accidentally right today and would be silently wrong the
+       * moment the predicate changed.
+       *
+       * Wall clock, deliberately, unlike src/utils/clock.ts. A duration must
+       * never be measured with a clock that can jump; a retry WINDOW may be,
+       * because the worst an NTP correction can do here is retry a little
+       * early or a little late. Neither loses data.
+       *
+       * The outbox is local-only — it is not in SYNC_TABLES and has no `_live`
+       * view — so this needs no view rebuild, unlike migrations 10 and 11.
+       */
+      await db.execAsync(
+        'ALTER TABLE outbox ADD COLUMN last_attempt_at INTEGER;',
+      );
+    },
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {

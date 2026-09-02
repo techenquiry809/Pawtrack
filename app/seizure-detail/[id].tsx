@@ -30,7 +30,7 @@ import { goBackOrHome } from '@/utils/nav';
 import { BackButton } from '@/components/BackButton';
 import * as seizureRepo from '@/db/seizureRepo';
 import { deleteVideoAssets } from '@/services/videoService';
-import { formatDuration } from '@/utils/time';
+import { formatDuration, formatFullDate, formatShortDate, hasKnownTime, timeOfDay } from '@/utils/time';
 import type { DurationConfidence, SeizureWithVideos } from '@/types/domain';
 
 /** How the record was timed — provenance, not a clinical grade. */
@@ -179,7 +179,8 @@ export default function SeizureDetailScreen() {
     record.durationConfidence === 'unreliable' && hasDuration
       ? OWNER_STATED_COPY
       : CONFIDENCE_COPY[record.durationConfidence];
-  const started = new Date(record.start);
+  const startedDate = formatFullDate(record.start);
+  const startedTime = timeOfDay(record.start, hasKnownTime(record.timingConfidence));
 
   return (
     <ScrollView
@@ -189,14 +190,25 @@ export default function SeizureDetailScreen() {
         { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + spacing.xl },
       ]}
     >
-      <Muted style={styles.eyebrow}>
-        {started.toLocaleDateString(undefined, {
-          weekday: 'long', day: 'numeric', month: 'long',
-        })}
-      </Muted>
-      <Title>
-        {started.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
-      </Title>
+      {/*
+        The heading is the TIME, with the date above it — but only when there
+        is a time. A record the owner could not time is stored at the start of
+        that day, and printing that as a "00:00" headline states a midnight
+        seizure that nobody observed.
+
+        When there is no time the DATE is promoted into the heading instead of
+        being repeated in both slots. That keeps the page titled by the most
+        precise thing actually known, and says nothing at all about the missing
+        hour — the absence is not the headline.
+      */}
+      {startedTime !== null ? (
+        <>
+          <Muted style={styles.eyebrow}>{startedDate}</Muted>
+          <Title>{startedTime}</Title>
+        </>
+      ) : (
+        <Title>{startedDate}</Title>
+      )}
 
       {/* --- Timing ------------------------------------------------- */}
       <Card style={{ marginTop: spacing.md }}>
@@ -282,9 +294,7 @@ export default function SeizureDetailScreen() {
               <View key={`${e.editedAt}_${e.summary}`} style={styles.editRow}>
                 <Muted>{e.summary}</Muted>
                 <Muted>
-                  {new Date(e.editedAt).toLocaleDateString(undefined, {
-                    day: 'numeric', month: 'short',
-                  })}
+                  {formatShortDate(e.editedAt)}
                 </Muted>
               </View>
             ))}

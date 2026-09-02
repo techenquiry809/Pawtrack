@@ -38,7 +38,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Body, Button, Heading, Muted, Pill } from '@/components/ui';
 import { Icon } from '@/components/Icon';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
-import { localDayKey } from '@/utils/time';
+import { formatFullDate, localDayKey } from '@/utils/time';
 import type { DailyCheckin } from '@/types/domain';
 
 /** Monday-first: the app's users think in weeks that start on Monday. */
@@ -375,9 +375,7 @@ function DaySummary({
     <View style={styles.summaryPanel}>
       <View style={styles.summaryHead}>
         <Text style={styles.summaryDate}>
-          {date.toLocaleDateString(undefined, {
-            weekday: 'long', day: 'numeric', month: 'long',
-          })}
+          {formatFullDate(date.getTime())}
         </Text>
         {record.backfilled && <Pill label="Filled in later" tone="teal" />}
       </View>

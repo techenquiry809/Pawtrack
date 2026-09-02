@@ -14,7 +14,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
 import {
   Body,
   Button,
@@ -25,10 +24,8 @@ import {
   Pill,
   Title,
 } from '@/components/ui';
-import { TextAction } from '@/components/form';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fontFamily, spacing } from '@/theme/tokens';
-import { goBackOrHome } from '@/utils/nav';
 import { BackButton } from '@/components/BackButton';
 import {
   listDevices,
@@ -59,7 +56,6 @@ function lastSeen(iso: string): string {
 }
 
 export default function DevicesScreen() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const status = useAuthStore((s) => s.status);
 

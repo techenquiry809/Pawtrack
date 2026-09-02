@@ -1,4 +1,4 @@
-# Paws Journal — Build Manual
+# PawTrack — Build Manual
 
 A study reference for the whole codebase: every package, the layer architecture,
 all domain types, and the SQLite schema.
@@ -14,7 +14,9 @@ Companion to `ARCHITECTURE.md` (the *why* behind decisions), `TOOLSET.md`
 | **Language** | TypeScript `~6.0.3`, strict mode |
 | **Storage** | SQLite on device, 8 migrations |
 | **Backend** | None — nothing leaves the phone |
-| **Bundle ID** | `com.pawsjournal.app` |
+| **Bundle ID** | `com.pawtrack.app` |
+| **Deep links** | `pawtrack://` |
+| **Icons** | six files in `assets/`, all derived from `assets/source/pawtrack-logo.jpg` by `npm run build:icons` |
 
 ---
 
@@ -73,7 +75,7 @@ can still cost you an app review.
 | `expo-router` | `^57.0.16` | File-based routing, nested layouts (`_layout.tsx`), typed paths, deep linking. | Core |
 | `react-native-screens` | `~4.26.0` | Backs each route with a real native screen container, so transitions and memory behave natively. | Peer |
 | `react-native-safe-area-context` | `~5.7.0` | Reports notch and home-indicator insets. Used by the floating glass tab bar. | In use |
-| `expo-linking` | `^57.0.7` | Deep links on the `pawsjournal://` scheme. Required by the router, not imported directly. | Peer |
+| `expo-linking` | `^57.0.7` | Deep links on the `pawtrack://` scheme. Required by the router, not imported directly. | Peer |
 | `expo-constants` | `^57.0.14` | Reads `app.config.ts` values at runtime. Router dependency. | Peer |
 | `react-native-reanimated` | `4.5.1` | Animations that run on the UI thread. Pulled in as a router/screens peer; no direct imports yet. | Peer |
 | `react-native-worklets` | `0.10.1` | The worklet runtime Reanimated 4 is built on. Never imported by hand. | Peer |
@@ -392,7 +394,12 @@ npm start              # expo start — Metro dev server; press i / a to open
 npm run start:clear    # same, with the bundler cache wiped
 npm run typecheck      # tsc --noEmit — run this before every commit
 npm run doctor         # expo-doctor — checks package versions match the SDK
+npm run build:icons    # redraws every launcher asset from the source logo
 ```
+
+`build:icons` is manual on purpose, like `build-breeds.ts`. Edit
+`assets/source/pawtrack-logo.jpg`, re-run it, look at the six images, commit
+them. Never hand-edit an output: it is the one thing that will silently drift.
 
 ### Native builds
 
@@ -435,7 +442,7 @@ Three packages were added after this document was first written:
 
 | Package | What it does |
 |---|---|
-| `expo-media-library` | Saves a seizure video into the phone's Photos app, in a "Paws Journal" album. Requested `writeOnly`. |
+| `expo-media-library` | Saves a seizure video into the phone's Photos app, in a "PawTrack" album. Requested `writeOnly`. |
 | `expo-video` | Playback on the video detail screen. Replaces the deprecated `expo-av` Video component. |
 | `expo-video-thumbnails` | Extracts a poster frame at import time for the gallery grid. |
 

@@ -211,12 +211,23 @@ export default function RecoveryScreen() {
         accessibilityHint="Records how long recovery took and saves this seizure"
         style={styles.primary}
       />
+      {/*
+        "Not yet, I'll add this later" promised something the app cannot do.
+        There is no editor: seizure detail is read-only and says so ("Editing
+        individual fields is coming"), so an owner who took that button at its
+        word would go looking for a way back in and find none.
+
+        The label now states the only thing that actually happens — the record
+        is saved, without a recovery time. That is a complete, honest answer to
+        the question above it, and it stops the screen from writing a cheque
+        the rest of the app does not honour.
+      */}
       <Button
-        label="Not yet, I'll add this later"
+        label="Save without recovery time"
         variant="ghost"
         disabled={saving}
         onPress={() => void finish(null)}
-        accessibilityHint="Saves this seizure now without a recovery time. You can add it later from History."
+        accessibilityHint="Saves this seizure now. Recovery length is left blank rather than guessed."
         style={styles.secondary}
       />
 
@@ -275,14 +286,4 @@ const styles = StyleSheet.create({
   assure: { marginTop: spacing.md, gap: spacing.xs },
   assureLine: { fontSize: fontSize.sm, textAlign: 'center' },
 
-  timerWrap: { alignItems: 'center', marginTop: spacing.xl },
-  timer: {
-    fontSize: fontSize.timerMd,
-    fontWeight: '700',
-    color: colors.ink,
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -1,
-    fontFamily: fontFamily.bold
-  },
-  timerCaption: { marginTop: 4 },
 });

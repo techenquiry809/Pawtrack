@@ -210,8 +210,3 @@ export async function rescheduleIfTimezoneChanged(): Promise<boolean> {
   await rescheduleAll();
   return true;
 }
-
-/** Test seam — resets the remembered offset. */
-export function resetTimezoneTracking(): void {
-  lastOffsetMin = null;
-}

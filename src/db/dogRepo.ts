@@ -10,7 +10,6 @@
 import { getDb, uid, toSqlJson, fromSqlObject } from './client';
 import { newRowOwner, ownerScope } from './scope';
 import { enqueue } from './outbox';
-import { tombstone } from './tombstone';
 import type {
   Breed,
   Dog,
@@ -95,16 +94,6 @@ export async function listDogs(): Promise<Dog[]> {
     owner.params,
   );
   return rows.map(rowToDog);
-}
-
-export async function getDog(id: string): Promise<Dog | null> {
-  const db = await getDb();
-  const owner = ownerScope();
-  const row = await db.getFirstAsync<DogRow>(
-    `SELECT * FROM dogs_live WHERE id = ? AND ${owner.sql}`,
-    [id, ...owner.params],
-  );
-  return row ? rowToDog(row) : null;
 }
 
 export type NewDogInput = {
@@ -196,29 +185,6 @@ export async function updateDog(
     );
     await enqueue(db, 'dogs', id, 'upsert', now);
   });
-}
-
-/**
- * Soft-deletes the dog and everything beneath them.
- *
- * ── WHAT CHANGED, AND WHY THE COMMENT ABOVE THIS USED TO BE WRONG ─────
- *
- * This was a hard DELETE that leaned on ON DELETE CASCADE to remove every
- * seizure, video row, medication and check-in. Foreign keys fire on a DELETE.
- * They do not fire on the UPDATE that a replicable delete has to be — so the
- * moment deletes went soft, that cascade silently stopped happening and would
- * have left an entire dog's history live but unreachable, then pushed it to
- * every other device as orphans.
- *
- * tombstone() walks the subtree explicitly instead, in one transaction, and
- * queues every row it marks. See src/db/tombstone.ts.
- *
- * Video FILES on disk are still the caller's job — this layer never touches
- * the filesystem. Note the asymmetry that is deliberate: the row deletion
- * syncs, the file deletion does not.
- */
-export async function deleteDog(id: string): Promise<void> {
-  await tombstone('dogs', id);
 }
 
 /** Display helper shared by Home, History and the vet report. */

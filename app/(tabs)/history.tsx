@@ -54,7 +54,7 @@ import * as checkinRepo from '@/db/checkinRepo';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as videoRepo from '@/db/videoRepo';
 import { GalleryHeader, VideoGallery } from '@/components/VideoGallery';
-import { formatDuration, DAY_MS } from '@/utils/time';
+import { DAY_MS, formatDuration, formatShortDate, hasKnownTime, timeOfDay } from '@/utils/time';
 import {
   buildEvents, dayLabel, groupByDay,
   type TimelineEvent, type TimelineEventKind,
@@ -378,9 +378,7 @@ function StatGrid({
       >
         <Muted style={styles.cardFoot}>
           {last
-            ? new Date(last.start).toLocaleDateString(undefined, {
-                day: 'numeric', month: 'short',
-              })
+            ? formatShortDate(last.start)
             : 'None recorded'}
         </Muted>
       </StatCard>
@@ -490,9 +488,14 @@ function EventRow({
   onPress?: () => void;
 }) {
   const meta = KIND_META[event.kind];
-  const time = new Date(event.timestamp).toLocaleTimeString(undefined, {
-    hour: 'numeric', minute: '2-digit',
-  });
+  // Null on a seizure the owner could not time — its timestamp is the start of
+  // that day, and the row is already filed under that day's heading, so there
+  // is nothing left to say. Doses and check-ins carry no timingConfidence and
+  // their timestamps are always real.
+  const time = timeOfDay(
+    event.timestamp,
+    event.timingConfidence === undefined || hasKnownTime(event.timingConfidence),
+  );
   // Absence of a duration, not low confidence in one — an owner-stated length on
   // an imported record is 'unreliable' by design and must still be shown.
   const untimed = event.durationSec === undefined || event.durationSec === 0;
@@ -507,7 +510,7 @@ function EventRow({
       <View style={styles.eventBody}>
         <View style={styles.eventTop}>
           <Text style={[styles.eventKind, { color: meta.color }]}>{meta.label}</Text>
-          <Text style={styles.eventTime}>{time}</Text>
+          {time !== null && <Text style={styles.eventTime}>{time}</Text>}
         </View>
 
         <Body style={styles.eventDetail} numberOfLines={2}>

@@ -611,7 +611,7 @@ commits the record.
 | 8 | Emergency-vet button gated on `Linking.canOpenURL('tel:…')` | `app/seizure/live.tsx` | Android 11+ returns `false` without a `<queries>` manifest entry, so the button would refuse to dial during an emergency. Now it calls and only reports a real failure |
 | 9 | Discarding a live seizure orphaned recorded videos on disk | `app/seizure/live.tsx` | Videos are copied to permanent storage on capture; nothing referenced or could delete them afterwards |
 | 10 | `formatDuration` rounded the seconds remainder, producing `1m 60s` | `src/utils/time.ts` | Reads as a bug on a vet report |
-| 11 | Today's check-in window was `startOfDay(now) + DAY_MS` | `src/db/checkinRepo.ts`, `src/utils/time.ts` | A local day is 23 or 25 hours on a DST change, so a late check-in could be missed or duplicated. Now uses `startOfNextDay()` |
+| 11 | Today's check-in window was `startOfDay(now) + DAY_MS` | `src/db/checkinRepo.ts`, `src/utils/time.ts` | A local day is 23 or 25 hours on a DST change, so a late check-in could be missed or duplicated. Fixed with `startOfNextDay()`, later superseded entirely by the `check_in_date` day-key column and its UNIQUE index — the window is now a calendar-day string comparison, so no millisecond arithmetic is involved. `startOfNextDay()` has since been deleted as unused |
 | 12 | `UIBackgroundModes: ['audio']` declared with no audio playback | `app.config.ts` | Does not keep the timer running (it never needed to — absolute timestamps), and is an App Review rejection under guideline 2.5.4 |
 | 13 | `react-native-safe-area-context` / `react-native-screens` floated above the versions Expo SDK 57 was tested against | `package.json` | Untested native module versions; `npx expo-doctor` now passes 21/21 |
 | 14 | `activeSeizureStore.ts` claimed it persisted the draft to storage; it never did | `src/store/activeSeizureStore.ts` | A false claim in the most safety-critical file. Comment corrected and the gap is listed below |
@@ -763,9 +763,17 @@ src/utils/time.ts                 Duration/clock formatting
 - No vet document attachments (lab reports, imaging)
 
 ### Configuration required before release
-- [ ] Replace app icon and splash in `assets/`
-- [ ] Confirm bundle id `com.pawsjournal.app` in `app.config.ts`
+- [x] Replace app icon in `assets/` — done in the PawTrack rename. All six
+      launcher files are derived from `assets/source/pawtrack-logo.jpg` by
+      `npm run build:icons`; edit that drawing and re-run, never the outputs.
+- [ ] Wire a splash screen. `assets/splash-icon.png` is drawn and waiting, but
+      nothing reads it: `expo-splash-screen` is not a dependency and has no
+      plugin entry, so builds still show the blank default.
+- [x] Confirm bundle id `com.pawtrack.app` in `app.config.ts`
       (**permanent once published — change it before first submission**)
+- [ ] Add `pawtrack://reset-password` to the Supabase Auth redirect allow-list.
+      The scheme changed with the rename and password reset links open through
+      it — the old `pawsjournal://` entry is now dead.
 - [ ] `eas init` to generate the EAS project id
 - [ ] Apple Developer account ($99/yr) for TestFlight + App Store
 - [ ] Google Play Developer account ($25 once)

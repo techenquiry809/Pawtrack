@@ -1,4 +1,4 @@
-# Paws Journal — React Native + Expo
+# PawTrack — React Native + Expo
 
 A dog seizure tracking app. Record a seizure in one tap, capture structured
 observations without typing, and produce a clean report for your veterinarian.

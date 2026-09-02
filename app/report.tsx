@@ -34,7 +34,7 @@ import { DatePickerSheet } from '@/components/DatePickerSheet';
 import {
   dayKeyOf, formatRangeLabel, resolveRange, type ReportScope,
 } from '@/features/report/range';
-import { collectReport } from '@/features/report/collect';
+import { collectReport, earliestRecordDay } from '@/features/report/collect';
 import { summarizeReport } from '@/features/report/summarize';
 import { buildReport, shareReport, type BuiltReport } from '@/services/reportExport';
 import { DogAvatar } from '@/components/ProfileHeader';
@@ -47,7 +47,7 @@ import { breedDisplay } from '@/db/dogRepo';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import * as medicationRepo from '@/db/medicationRepo';
-import { formatDuration, localDayKey, DAY_MS } from '@/utils/time';
+import { formatDuration, hasKnownTime, timeOfDay, localDayKey, DAY_MS } from '@/utils/time';
 import { buildPatternReport, durationStats } from '@/features/analytics';
 import {
   DOSE_STATUS_LABEL,
@@ -67,8 +67,15 @@ export default function ReportScreen() {
   const [loaded, setLoaded] = useState(false);
 
   /* --- Export ------------------------------------------------------- */
-  /** 'all' keeps the screen's original behaviour, so nothing regresses. */
-  const [scope, setScope] = useState<ReportScope | 'all'>('day');
+  /**
+   * All four scopes now produce a real PDF.
+   *
+   * 'all' used to be a screen-only mode that showed the history below and
+   * could not be exported, which made it the one period an owner could read
+   * but not hand to a vet — exactly backwards for the scope that answers
+   * "how has this dog been since we started?".
+   */
+  const [scope, setScope] = useState<ReportScope>('week');
   const [pickedDay, setPickedDay] = useState(localDayKey());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [building, setBuilding] = useState(false);
@@ -113,14 +120,19 @@ export default function ReportScreen() {
    * even include anything?", and this answers it up front.
    */
   useEffect(() => {
-    if (!dog || scope === 'all') {
+    if (!dog) {
       setPreview(null);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const range = resolveRange(scope, pickedDay);
+        // Same two-pass resolution the exporter uses, so the counts shown here
+        // can never describe a different span from the file that gets built.
+        const earliest =
+          scope === 'all' ? await earliestRecordDay(dog.id, dayKeyOf) : undefined;
+        if (cancelled) return;
+        const range = resolveRange(scope, pickedDay, earliest ?? undefined);
         const data = await collectReport(dog, range);
         const summary = summarizeReport(data, dayKeyOf);
         if (!cancelled) {
@@ -134,11 +146,20 @@ export default function ReportScreen() {
     return () => { cancelled = true; };
   }, [dog, scope, pickedDay]);
 
+  /**
+   * The label beside the date button.
+   *
+   * All-time is resolved asynchronously (it needs the first record's date), so
+   * this synchronous label says what the scope means rather than guessing at a
+   * span it cannot know yet. The exported file carries the resolved span.
+   */
   const rangeLabel =
-    scope === 'all' ? 'Everything recorded' : formatRangeLabel(resolveRange(scope, pickedDay));
+    scope === 'all'
+      ? 'Every record, up to today'
+      : formatRangeLabel(resolveRange(scope, pickedDay));
 
   const onExport = useCallback(async () => {
-    if (!dog || scope === 'all' || building) return;
+    if (!dog || building) return;
     setBuilding(true);
     try {
       const built: BuiltReport = await buildReport(dog, scope, pickedDay);
@@ -204,15 +225,17 @@ export default function ReportScreen() {
       <SectionTitle>Create a file</SectionTitle>
       <Card>
         <Muted style={styles.exportIntro}>
-          A PDF for one day or one week, to send to your vet or keep.
+          A PDF of {dog.name}&apos;s records — seizures, medication and daily
+          check-ins — to send to your vet or keep.
         </Muted>
 
         <View style={styles.exportControl}>
-          <SegmentedControl<ReportScope | 'all'>
+          <SegmentedControl<ReportScope>
             options={[
               { value: 'day', label: 'Day' },
               { value: 'week', label: 'Week' },
-              { value: 'all', label: 'All time' },
+              { value: 'month', label: 'Month' },
+              { value: 'all', label: 'All' },
             ]}
             value={scope}
             onChange={setScope}
@@ -220,40 +243,43 @@ export default function ReportScreen() {
           />
         </View>
 
+        {/*
+          All-time has no date to pick: it runs from the first record to today
+          by definition, so a picker would offer a choice that changes nothing.
+        */}
         {scope === 'all' ? (
-          <Muted>
-            The whole history is shown below. Choose Day or Week to create a file you can send.
-          </Muted>
+          <View style={styles.dateBtn}>
+            <Body style={styles.flexOne}>{rangeLabel}</Body>
+            <Icon name="calendar" size="sm" color={colors.inkSoft} />
+          </View>
         ) : (
-          <>
-            <Pressable
-              onPress={() => setPickerOpen(true)}
-              accessibilityRole="button"
-              accessibilityLabel={`Change the period. Currently ${rangeLabel}`}
-              style={({ pressed }) => [styles.dateBtn, pressed && styles.datePressed]}
-            >
-              <Body style={styles.flexOne}>{rangeLabel}</Body>
-              <Icon name="calendar" size="sm" color={colors.teal} />
-            </Pressable>
-
-            <Muted style={styles.previewLine}>
-              {preview === null
-                ? 'Checking what is in this period…'
-                : preview.seizures === 0 && preview.doses === 0
-                  ? 'Nothing was recorded. The file will say so, which is worth showing a vet.'
-                  : `${preview.seizures} ${preview.seizures === 1 ? 'seizure' : 'seizures'}` +
-                    `, ${preview.doses} ${preview.doses === 1 ? 'dose' : 'doses'} recorded.`}
-            </Muted>
-
-            <Button
-              label={building ? 'Creating…' : 'Create PDF'}
-              onPress={() => void onExport()}
-              loading={building}
-              accessibilityHint="Builds the report and opens the share sheet"
-              style={styles.exportBtn}
-            />
-          </>
+          <Pressable
+            onPress={() => setPickerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`Change the period. Currently ${rangeLabel}`}
+            style={({ pressed }) => [styles.dateBtn, pressed && styles.datePressed]}
+          >
+            <Body style={styles.flexOne}>{rangeLabel}</Body>
+            <Icon name="calendar" size="sm" color={colors.teal} />
+          </Pressable>
         )}
+
+        <Muted style={styles.previewLine}>
+          {preview === null
+            ? 'Checking what is in this period…'
+            : preview.seizures === 0 && preview.doses === 0
+              ? 'Nothing was recorded. The file will say so, which is worth showing a vet.'
+              : `${preview.seizures} ${preview.seizures === 1 ? 'seizure' : 'seizures'}` +
+                `, ${preview.doses} ${preview.doses === 1 ? 'dose' : 'doses'} recorded.`}
+        </Muted>
+
+        <Button
+          label={building ? 'Creating…' : 'Create PDF'}
+          onPress={() => void onExport()}
+          loading={building}
+          accessibilityHint="Builds the report and opens the share sheet"
+          style={styles.exportBtn}
+        />
       </Card>
 
       <DatePickerSheet
@@ -264,7 +290,13 @@ export default function ReportScreen() {
           setPickerOpen(false);
         }}
         value={pickedDay}
-        title={scope === 'week' ? 'Pick any day in the week' : 'Pick a day'}
+        title={
+          scope === 'week'
+            ? 'Pick any day in the week'
+            : scope === 'month'
+              ? 'Pick any day in the month'
+              : 'Pick a day'
+        }
         maxDate={localDayKey()}
       />
 
@@ -347,10 +379,14 @@ export default function ReportScreen() {
             />
           </View>
           <Muted style={{ marginTop: 4 }}>
-            {new Date(s.start).toLocaleTimeString(undefined, {
-              hour: 'numeric', minute: '2-digit',
-            })}
-            {s.ictalObs.length > 0 && ` · ${s.ictalObs.join(', ')}`}
+            {/* The time only when the owner gave one; the observations then
+                stand alone rather than trailing a fabricated "00:00 ·". */}
+            {[
+              timeOfDay(s.start, hasKnownTime(s.timingConfidence)),
+              s.ictalObs.length > 0 ? s.ictalObs.join(', ') : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
           </Muted>
           {(s.retrospective || s.durationConfidence === 'recovered') && (
             <View style={styles.badges}>

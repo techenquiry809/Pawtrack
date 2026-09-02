@@ -30,6 +30,9 @@ import { setActiveUserId } from '@/db/scope';
 import { getDb } from '@/db/client';
 import * as outbox from '@/db/outbox';
 import { describeClaim, type ClaimSituation } from '@/services/sync/claim';
+import { describeAuthError, type AuthErrorNotice } from '@/services/authErrors';
+import { RESET_COOLDOWN_MS, secondsUntil, signInBackoffMs } from './authThrottle';
+export { secondsUntil, signInBackoffMs } from './authThrottle';
 
 export type AuthStatus = 'loading' | 'signed-out' | 'signed-in';
 
@@ -69,8 +72,24 @@ type AuthState = {
    * non-null; nothing is merged until the owner chooses.
    */
   pendingClaim: ClaimSituation | null;
-  /** Last auth error, for the sign-in screen to render. */
-  error: string | null;
+  /**
+   * Consecutive failed password attempts, and when the next one is allowed.
+   * A UX affordance only — see the note on signInBackoffMs above.
+   */
+  failedAttempts: number;
+  signInBlockedUntil: number | null;
+  /** When the next password-reset email may be sent. */
+  resetEmailAllowedAt: number | null;
+
+  /**
+   * Last auth error, as something the screen can render properly.
+   *
+   * A structured notice rather than a bare string: the UI needs a title to
+   * scan, a body to read, and to know whether offering "Try again" is honest.
+   * `null` covers both "nothing went wrong" and "the owner cancelled" — see
+   * services/authErrors.ts for why those are the same state.
+   */
+  error: AuthErrorNotice | null;
   busy: boolean;
 
   /**
@@ -89,7 +108,7 @@ type AuthState = {
   sendPasswordReset: (email: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   clearPendingClaim: () => void;
-  setError: (message: string | null) => void;
+  setError: (message: AuthErrorNotice | null) => void;
 };
 
 /**
@@ -103,12 +122,15 @@ function applySession(session: Session | null): void {
   setActiveUserId(session?.user.id ?? null);
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
+export const useAuthStore = create<AuthState>((set) => ({
   status: 'loading',
   session: null,
   user: null,
   pendingClaim: null,
   awaitingConfirmation: null,
+  failedAttempts: 0,
+  signInBlockedUntil: null,
+  resetEmailAllowedAt: null,
   error: null,
   busy: false,
 
@@ -204,12 +226,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
       if (error) throw new Error(error.message);
     } catch (e) {
-      // The user backing out of the system sheet is not an error worth showing.
-      const message = e instanceof Error ? e.message : 'Apple sign-in failed.';
-      const cancelled =
-        typeof e === 'object' && e !== null && 'code' in e &&
-        (e as { code?: string }).code === 'ERR_REQUEST_CANCELED';
-      set({ error: cancelled ? null : message });
+      // Cancellation, provider codes and our own messages are all decided in
+      // one place now, so Apple and Google cannot drift apart again.
+      set({ error: describeAuthError(e, 'apple') });
     } finally {
       set({ busy: false });
     }
@@ -234,9 +253,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       await GoogleSignin.hasPlayServices();
       const response = await GoogleSignin.signIn();
-      const idToken =
-        'data' in response ? response.data?.idToken : null;
 
+      /*
+       * CANCELLATION RESOLVES HERE. IT DOES NOT THROW.
+       *
+       * The library returns a discriminated union, and backing out of the
+       * sheet gives `{ type: 'cancelled', data: null }` — a normal resolved
+       * value, not a rejection.
+       *
+       * The previous line was:
+       *
+       *   const idToken = 'data' in response ? response.data?.idToken : null;
+       *
+       * `'data' in response` is TRUE for the cancelled shape, so it read
+       * `null?.idToken`, got undefined, and fell into the throw below —
+       * manufacturing "Google did not return an identity token" out of a
+       * deliberate choice. That is what put an error panel in front of anyone
+       * who changed their mind, and no amount of message-matching downstream
+       * could undo it: the information was already destroyed here.
+       */
+      if (response.type !== 'success') {
+        set({ error: null });
+        return;
+      }
+
+      const idToken = response.data?.idToken;
       if (!idToken) throw new Error('Google did not return an identity token.');
 
       const { error } = await supabase.auth.signInWithIdToken({
@@ -245,8 +286,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
       if (error) throw new Error(error.message);
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Google sign-in failed.';
-      set({ error: message });
+      // Previously this set the raw thrown message with no cancellation check,
+      // so dismissing the Google sheet raised a red panel reading things like
+      // "DEVELOPER_ERROR" at someone who had simply changed their mind.
+      set({ error: describeAuthError(e, 'google') });
     } finally {
       set({ busy: false });
     }
@@ -272,6 +315,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signInWithPassword: async (email: string, password: string) => {
     const supabase = getSupabase();
     if (!supabase) return;
+
+    // Refuse locally while the backoff is running, so the attempt never
+    // reaches the server and the countdown the screen shows stays truthful.
+    const blockedUntil = useAuthStore.getState().signInBlockedUntil;
+    const waitSeconds = secondsUntil(blockedUntil);
+    if (waitSeconds > 0) {
+      set({
+        error: {
+          title: 'Too many attempts',
+          body: `Wait ${waitSeconds} ${waitSeconds === 1 ? 'second' : 'seconds'} and try again. Nothing has been lost — your records are on this phone either way.`,
+          retryable: false,
+        },
+      });
+      return;
+    }
+
     set({ busy: true, error: null, awaitingConfirmation: null });
     try {
       const { error } = await supabase.auth.signInWithPassword({
@@ -292,8 +351,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
         throw new Error('That email and password do not match.');
       }
+      // Clean sign-in clears the backoff; the next wrong password starts over.
+      set({ failedAttempts: 0, signInBlockedUntil: null });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : 'Could not sign in.' });
+      // Only a WRONG CREDENTIAL counts toward the backoff. "Confirm your email
+      // first" is a correct password on an unconfirmed account — throttling it
+      // would lock someone out of the one screen that tells them to go and
+      // click the link, which is the opposite of what the backoff is for.
+      if (useAuthStore.getState().awaitingConfirmation === null) {
+        const failures = useAuthStore.getState().failedAttempts + 1;
+        const backoff = signInBackoffMs(failures);
+        set({
+          failedAttempts: failures,
+          signInBlockedUntil: backoff > 0 ? Date.now() + backoff : null,
+        });
+      }
+      // The password paths above throw messages already written for owners,
+      // and describeAuthError passes those straight through.
+      set({ error: describeAuthError(e, 'password') });
     } finally {
       set({ busy: false });
     }
@@ -342,7 +417,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ awaitingConfirmation: email });
       }
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : 'Could not create the account.' });
+      set({ error: describeAuthError(e, 'password') });
     } finally {
       set({ busy: false });
     }
@@ -358,10 +433,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   sendPasswordReset: async (email: string) => {
     const supabase = getSupabase();
     if (!supabase) return true;
-    set({ busy: true, error: null });
+
+    // Each press sends MAIL. The cooldown is what stops a mashed button from
+    // filling someone's inbox — including someone who is not the person
+    // pressing it, since the address is whatever was typed.
+    const wait = secondsUntil(useAuthStore.getState().resetEmailAllowedAt);
+    if (wait > 0) {
+      set({
+        error: {
+          title: 'Email already sent',
+          body: `Check your inbox and spam folder. You can send another in ${wait} ${wait === 1 ? 'second' : 'seconds'}.`,
+          retryable: false,
+        },
+      });
+      return false;
+    }
+
+    set({ busy: true, error: null, resetEmailAllowedAt: Date.now() + RESET_COOLDOWN_MS });
     try {
       await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
-        redirectTo: 'pawsjournal://reset-password',
+        redirectTo: 'pawtrack://reset-password',
       });
     } catch (e) {
       console.warn('[auth] password reset failed', e);
@@ -388,7 +479,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       applySession(null);
       set({ status: 'signed-out', session: null, user: null, pendingClaim: null });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : 'Could not sign out.' });
+      set({
+        error: {
+          title: 'Could not sign out',
+          body:
+            'You are still signed in on this device. Your records are safe either way — try again in a moment.',
+          retryable: true,
+        },
+      });
     } finally {
       set({ busy: false });
     }

@@ -30,7 +30,7 @@
  * second device, nothing more. "Not now" stays a first-class option.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -48,6 +48,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Heading, Muted, Title } from '@/components/ui';
 import { Icon } from '@/components/Icon';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { AuthField } from '@/components/AuthField';
 import { PawTrail } from '@/components/PawTrail';
 import { colors, fontFamily, fontSize, radius, shadow, spacing } from '@/theme/tokens';
@@ -56,6 +57,7 @@ import {
   accountsAvailable,
   appleSignInAvailable,
   useAuthStore,
+  secondsUntil,
 } from '@/store/authStore';
 import { clearStrandedRowCount, strandedRowCount } from '@/services/sync/devices';
 import { dismissAuthPrompt } from '@/services/authPrompt';
@@ -74,6 +76,25 @@ export default function SignInScreen() {
   const signInWithPassword = useAuthStore((s) => s.signInWithPassword);
   const sendPasswordReset = useAuthStore((s) => s.sendPasswordReset);
   const setError = useAuthStore((s) => s.setError);
+  const signInBlockedUntil = useAuthStore((s) => s.signInBlockedUntil);
+  const resetEmailAllowedAt = useAuthStore((s) => s.resetEmailAllowedAt);
+
+  /*
+   * A once-a-second tick, alive only while something is actually counting
+   * down. A disabled button with no explanation is the state that reads as a
+   * broken app, so the label carries the remaining seconds — and the interval
+   * exists solely to keep that number honest.
+   */
+  const [, setTick] = useState(0);
+  const counting = signInBlockedUntil !== null || resetEmailAllowedAt !== null;
+  useEffect(() => {
+    if (!counting) return;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [counting]);
+
+  const blockedSeconds = secondsUntil(signInBlockedUntil);
+  const resetSeconds = secondsUntil(resetEmailAllowedAt);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -82,7 +103,18 @@ export default function SignInScreen() {
   const [stranded, setStranded] = useState(0);
 
   useEffect(() => {
-    void strandedRowCount().then(setStranded);
+    // Reads SQLite, so it can reject, and it can resolve after the owner has
+    // already tapped "Not now" and left. Zero is the right fallback: the
+    // stranded-rows notice simply does not appear.
+    let cancelled = false;
+    void strandedRowCount()
+      .then((n) => {
+        if (!cancelled) setStranded(n);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /* ---- Entrance ---------------------------------------------------- */
@@ -118,10 +150,25 @@ export default function SignInScreen() {
     return Object.keys(next).length === 0;
   };
 
+  /**
+   * The action to repeat if the owner presses "Try again".
+   *
+   * Held rather than inferred: the error card sits above the provider buttons
+   * and below the password form, so there is no way to tell from the error
+   * alone which of the three the owner had pressed. Retrying the wrong one is
+   * worse than not offering retry.
+   */
+  const lastAttempt = useRef<(() => Promise<void>) | null>(null);
+
+  const attempt = useCallback(async (run: () => Promise<void>) => {
+    lastAttempt.current = run;
+    await run();
+  }, []);
+
   const onSignIn = async () => {
     setError(null);
     if (!validate()) return;
-    await signInWithPassword(email, password);
+    await attempt(() => signInWithPassword(email, password));
   };
 
   const onForgot = async () => {
@@ -249,15 +296,29 @@ export default function SignInScreen() {
                   onSubmitEditing={() => void onSignIn()}
                 />
 
-                <Button label="Sign in" onPress={() => void onSignIn()} loading={busy} />
+                <Button
+                  label={
+                    blockedSeconds > 0 ? `Try again in ${blockedSeconds}s` : 'Sign in'
+                  }
+                  onPress={() => void onSignIn()}
+                  loading={busy}
+                  disabled={blockedSeconds > 0}
+                />
 
                 <Pressable
                   onPress={() => void onForgot()}
                   hitSlop={8}
                   accessibilityRole="button"
+                  disabled={resetSeconds > 0}
                   style={styles.forgot}
                 >
-                  <Text style={styles.forgotText}>Forgot your password?</Text>
+                  <Text
+                    style={[styles.forgotText, resetSeconds > 0 && styles.forgotWaiting]}
+                  >
+                    {resetSeconds > 0
+                      ? `You can send another email in ${resetSeconds}s`
+                      : 'Forgot your password?'}
+                  </Text>
                 </Pressable>
               </View>
 
@@ -289,9 +350,19 @@ export default function SignInScreen() {
               )}
 
               {error && (
-                <View style={[styles.card, styles.errorCard]}>
-                  <Body>{error}</Body>
-                </View>
+                <ErrorNotice
+                  title={error.title}
+                  body={error.body}
+                  onDismiss={() => setError(null)}
+                  onRetry={
+                    error.retryable && lastAttempt.current
+                      ? () => {
+                          setError(null);
+                          void lastAttempt.current?.();
+                        }
+                      : undefined
+                  }
+                />
               )}
 
               {/* ---- Providers --------------------------------------- */}
@@ -313,7 +384,7 @@ export default function SignInScreen() {
                     glyph=""
                     tone="dark"
                     disabled={busy}
-                    onPress={() => void signInWithApple()}
+                    onPress={() => void attempt(signInWithApple)}
                   />
                 )}
                 <ProviderButton
@@ -321,7 +392,7 @@ export default function SignInScreen() {
                   glyph="G"
                   tone="light"
                   disabled={busy}
-                  onPress={() => void signInWithGoogle()}
+                  onPress={() => void attempt(signInWithGoogle)}
                 />
               </View>
 
@@ -475,11 +546,11 @@ const styles = StyleSheet.create({
   },
   noticeCard: { backgroundColor: colors.amberTint, gap: spacing.sm },
   infoCard: { backgroundColor: colors.tealTint, gap: spacing.sm },
-  errorCard: { backgroundColor: colors.redTint, gap: spacing.sm },
   cardBody: { lineHeight: 21 },
   strong: { fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
 
   forgot: { alignSelf: 'center', paddingVertical: spacing.xs },
+  forgotWaiting: { color: colors.inkSoft },
   forgotText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.teal, fontFamily: fontFamily.bold },
 
   divider: {

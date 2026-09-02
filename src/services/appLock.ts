@@ -54,7 +54,7 @@ export async function isAppLockAvailable(): Promise<boolean> {
 export async function promptUnlock(): Promise<boolean> {
   try {
     const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: 'Unlock Paws Journal',
+      promptMessage: 'Unlock PawTrack',
       fallbackLabel: 'Use passcode',
       disableDeviceFallback: false,
       cancelLabel: 'Cancel',

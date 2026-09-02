@@ -54,15 +54,35 @@ const GLYPHS = {
   play: ['play', 'play'],
   search: ['search-outline', 'search'],
   clear: ['close-circle', 'close-circle'],
+  // Something went wrong. Outline by default so it reads as information
+  // rather than as an alarm — the emergency medkit glyph is reserved for the
+  // cluster banner, which IS an alarm.
+  warning: ['alert-circle-outline', 'alert-circle'],
 
-  // The five steps of the energy scale, sad → happy. Ionicons ships only two
-  // face shapes, so the middle three are carried by fill and a neutral dash
-  // rather than by five distinct faces that do not exist.
-  energy1: ['sad', 'sad'],
-  energy2: ['sad-outline', 'sad-outline'],
-  energy3: ['remove', 'remove'],
-  energy4: ['happy-outline', 'happy-outline'],
-  energy5: ['happy', 'happy'],
+  /*
+   * The five steps of the energy scale.
+   *
+   * These used to be sad → happy smileys, which had two problems. Ionicons
+   * ships only two face shapes, so the middle three were carried by fill and a
+   * neutral dash — a scale of five where three steps were the same drawing.
+   * And a smiley asks "what mood are you in", which is not the question: an
+   * owner is not rating their dog's happiness, they are reporting how the
+   * animal MOVED today, because that is the observation a vet can use.
+   *
+   * So the scale is now a dog's day, in the owner's own vocabulary:
+   *
+   *   flat out on the floor → mooching about → an ordinary day
+   *   → up for a walk → zoomies
+   *
+   * Five genuinely distinct glyphs, all from Ionicons, all colourable and
+   * sized from the same tokens as everything else — which is exactly why this
+   * did not become emoji. See the note at the top of this file.
+   */
+  energy1: ['bed-outline', 'bed'],
+  energy2: ['footsteps-outline', 'footsteps'],
+  energy3: ['paw-outline', 'paw'],
+  energy4: ['walk-outline', 'walk'],
+  energy5: ['tennisball-outline', 'tennisball'],
 
   profile: ['paw-outline', 'paw'],
   emergency: ['medkit-outline', 'medkit'],

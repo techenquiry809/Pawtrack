@@ -245,21 +245,6 @@ export async function deleteMedication(id: string): Promise<void> {
 /* Reminders                                                           */
 /* ------------------------------------------------------------------ */
 
-export async function listAllReminders(
-  dogId: string,
-): Promise<MedicationReminder[]> {
-  const db = await getDb();
-  const owner = ownerScope('r');
-  const rows = await db.getAllAsync<ReminderRow>(
-    `SELECT r.* FROM medication_reminders_live r
-       JOIN medications_live m ON m.id = r.medication_id
-      WHERE m.dog_id = ? AND ${owner.sql}
-      ORDER BY r.time_hhmm ASC`,
-    [dogId, ...owner.params],
-  );
-  return rows.map(rowToReminder);
-}
-
 /** Every enabled reminder across all dogs — what rescheduling iterates. */
 export async function listEnabledReminders(): Promise<
   (MedicationReminder & { medicationName: string; dogName: string; dose: string; unit: string })[]
@@ -303,10 +288,15 @@ export async function addReminder(
   });
 
   const db = await getDb();
+  // Owner-scoped like every other read in this file. Not reachable as a bug —
+  // `medicationId` is a UUID from the caller's own list, so a cross-account
+  // collision cannot occur — but an unfenced read is the wrong thing to leave
+  // as the template the next query gets copied from.
+  const owner = ownerScope();
   const existing = await db.getFirstAsync<{ id: string }>(
     `SELECT id FROM medication_reminders_live
-      WHERE medication_id = ? AND time_hhmm = ?`,
-    [medicationId, timeHHMM],
+      WHERE medication_id = ? AND time_hhmm = ? AND ${owner.sql}`,
+    [medicationId, timeHHMM, ...owner.params],
   );
   if (existing) return null;
 

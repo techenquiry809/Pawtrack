@@ -153,17 +153,3 @@ function clamp(ms: number, confidence: DurationConfidence): ResolvedDuration {
 
   return { durationSeconds: seconds, confidence };
 }
-
-/**
- * For the live screen's ticking display. Recomputed from the mark on every
- * render — the 1s interval only exists to trigger that render, so a suspended
- * JS thread costs nothing.
- */
-export function elapsedSecondsFromMark(mark: StartMark): number {
-  const monoStart = mark.startedAtMono;
-  const monoNow = monotonicNow();
-  if (monoStart !== null && monoNow !== null) {
-    return Math.max(0, Math.floor((monoNow - monoStart) / 1000));
-  }
-  return Math.max(0, Math.floor((Date.now() - mark.startedAtUtc) / 1000));
-}

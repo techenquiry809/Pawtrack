@@ -219,8 +219,3 @@ export function startAuthAutoRefresh(): () => void {
     supabase.auth.stopAutoRefresh();
   };
 }
-
-/** Test seam — forces the next getSupabase() to rebuild. */
-export function resetSupabaseClient(): void {
-  client = null;
-}

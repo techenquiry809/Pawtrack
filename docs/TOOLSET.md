@@ -42,7 +42,7 @@ These are in `package.json` and are already installed.
 | `expo-router` | File-based routing. A file in `app/` becomes a screen. | **Required** |
 | `react-native-screens` | Makes navigation use real native screen containers (faster, correct animations). | **Required** — peer dependency of the router |
 | `react-native-safe-area-context` | Tells us where the notch / home indicator are so content is not hidden. | **Required** — peer dependency |
-| `expo-linking` | Deep links (`pawsjournal://`). | **Required** by the router |
+| `expo-linking` | Deep links (`pawtrack://`). | **Required** by the router |
 | `expo-constants` | Reads values from `app.config.ts` at runtime. | **Required** by the router |
 
 ### Data

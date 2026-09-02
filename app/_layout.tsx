@@ -206,7 +206,7 @@ export default function RootLayout() {
     return (
       <SafeAreaProvider>
         <View style={styles.centre}>
-          <Body>Paws Journal could not start.</Body>
+          <Body>PawTrack could not start.</Body>
           <Muted style={styles.errorDetail}>{error}</Muted>
           <Muted style={styles.errorDetail}>
             Your saved records have not been deleted. Reopening the app usually
@@ -222,7 +222,7 @@ export default function RootLayout() {
     return (
       <SafeAreaProvider>
         <View style={styles.centre}>
-          <Body>Paws Journal is locked</Body>
+          <Body>PawTrack is locked</Body>
           <Muted style={styles.errorDetail}>
             Unlock with Face ID, Touch ID or your passcode.
           </Muted>

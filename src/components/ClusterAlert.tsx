@@ -227,6 +227,22 @@ export function ClusterAlert({
 
 const styles = StyleSheet.create({
   banner: {
+    /*
+     * This banner carries its own top margin, like every other top-level block
+     * on the dashboard (the cards and the recorder all set `spacing.lg`).
+     *
+     * It used to set none and simply inherit the gap from whatever sat above
+     * it — which was always the Daily Pulse card, until that card started
+     * collapsing away once the day is answered. The banner then became the
+     * first thing under the header and butted straight into the breed line,
+     * with no gap at all.
+     *
+     * Borrowing spacing from a sibling is what broke: an element that can only
+     * look right while a particular neighbour exists is one layout change away
+     * from looking broken, and this is the one element on the screen that must
+     * never look like a glitch — it is the cluster warning.
+     */
+    marginTop: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,

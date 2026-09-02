@@ -1,5 +1,5 @@
 /**
- * Domain model for Paws Journal.
+ * Domain model for PawTrack.
  *
  * Two things live here together on purpose:
  *   1. TypeScript types  — compile-time safety while we write code.
@@ -68,14 +68,6 @@ export const POST_BEHAVIOR_OPTIONS = [
 export const SEVERITY_OPTIONS = [
   'Mild-looking', 'Moderate-looking', 'Severe-looking', 'Unsure',
 ] as const;
-
-export type MovementObservation = (typeof MOVEMENT_OPTIONS)[number];
-export type AwarenessObservation = (typeof AWARENESS_OPTIONS)[number];
-export type AutonomicObservation = (typeof AUTONOMIC_OPTIONS)[number];
-export type PositionObservation = (typeof POSITION_OPTIONS)[number];
-export type PreIctalObservation = (typeof PRE_ICTAL_OPTIONS)[number];
-export type PostBehaviorObservation = (typeof POST_BEHAVIOR_OPTIONS)[number];
-export type OwnerSeverity = (typeof SEVERITY_OPTIONS)[number];
 
 /* ------------------------------------------------------------------ */
 /* Breed                                                               */
@@ -358,6 +350,14 @@ export type GalleryEntry = {
   seizureStart: number;
   seizureDurationSec: number;
   seizureDurationConfidence: DurationConfidence;
+  /**
+   * The parent seizure's timing confidence, which is what governs whether
+   * `video.timestamp` may be printed as a clock time — the clip's timestamp is
+   * that seizure's `start`, copied at attach time. 'unknown' means the owner
+   * never gave an hour, so the instant is the top of the day and no time
+   * should be shown.
+   */
+  seizureTimingConfidence: TimingConfidence;
   /** Count of ictal + post-ictal observations, for the "12 noted" tile badge. */
   observationCount: number;
   retrospective: boolean;

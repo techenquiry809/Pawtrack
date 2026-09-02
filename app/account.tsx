@@ -27,9 +27,7 @@ import {
   NavRow,
   Title,
 } from '@/components/ui';
-import { TextAction } from '@/components/form';
 import { colors, spacing } from '@/theme/tokens';
-import { goBackOrHome } from '@/utils/nav';
 import { BackButton } from '@/components/BackButton';
 import { pendingWriteCount, useAuthStore } from '@/store/authStore';
 import { useAppStore } from '@/store/appStore';

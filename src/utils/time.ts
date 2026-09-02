@@ -72,25 +72,73 @@ export function startOfDay(epochMs: number): number {
   return d.getTime();
 }
 
-/**
- * Start of the local day AFTER the one containing `epochMs`.
- *
- * Not `startOfDay(x) + DAY_MS`: on a daylight-saving change a local day is 23
- * or 25 hours long, so the fixed offset lands an hour inside the wrong day and
- * a check-in saved near midnight can be missed or double-counted.
- */
-export function startOfNextDay(epochMs: number): number {
-  const d = new Date(epochMs);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 1);
-  return d.getTime();
-}
-
-export function isSameLocalDay(a: number, b: number): boolean {
-  return startOfDay(a) === startOfDay(b);
-}
-
 export const DAY_MS = 86_400_000;
+
+/**
+ * Whether a record carries a clock time the owner actually gave.
+ *
+ * Both confidence scales in the app — `Seizure.timingConfidence`
+ * ('exact' | 'approximate' | 'unknown') and `Video.captureConfidence`
+ * ('device' | 'owner_stated' | 'unknown') — use the SAME word for the same
+ * fact, so one predicate serves both.
+ */
+export function hasKnownTime(confidence: string): boolean {
+  return confidence !== 'unknown';
+}
+
+/**
+ * The clock time, or null when the record has none.
+ *
+ * ── WHY THIS IS NOT `toLocaleTimeString` AT THE CALL SITE ─────────────
+ *
+ * A blank time is stored as the START OF THAT DAY (see DateTimeField), with
+ * the confidence field set to 'unknown' so the record stays honest about it.
+ * Formatting `start` unconditionally turns that sentinel back into a reading:
+ * every seizure the owner could not time was printed as "00:00", which looks
+ * exactly like a seizure that happened at midnight. On a screen an owner shows
+ * their vet, a placeholder that is indistinguishable from a measurement is the
+ * one thing this codebase refuses to do everywhere else — the duration figures
+ * already gate on `durationConfidence` for the same reason.
+ *
+ * Returning null rather than a dash is deliberate: the absence is not worth
+ * announcing. The date alone is the honest record, and a row that simply shows
+ * "1 Sep" reads as complete, where "1 Sep, —" reads as damaged.
+ */
+export function timeOfDay(epochMs: number, timeKnown: boolean): string | null {
+  if (!timeKnown) return null;
+  return new Date(epochMs).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * 'Tuesday 1 September' — the full, unambiguous date.
+ *
+ * Spelled out rather than numeric because `01/09` is September to half the
+ * world and January to the other half, and these dates are read aloud to vets
+ * and printed on records that leave the phone.
+ *
+ * Extracted because four screens had built this same option object by hand
+ * (check-in flow, seizure detail, video detail, the calendar header). Three
+ * copies is where a shared helper starts paying for itself; four is where they
+ * start drifting.
+ */
+export function formatFullDate(epochMs: number): string {
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+}
+
+/** '1 Sep' — the compact form, for list rows and tiles where space is tight. */
+export function formatShortDate(epochMs: number): string {
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+  });
+}
 
 /**
  * Local calendar day as 'YYYY-MM-DD' — the key the check-in unique index and

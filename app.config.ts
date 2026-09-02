@@ -10,14 +10,14 @@ import type { ExpoConfig } from 'expo/config';
 
 // IMPORTANT: these identifiers are permanent once you publish to the stores.
 // Change them BEFORE your first submission, never after.
-const BUNDLE_ID = 'com.pawsjournal.app';
+const BUNDLE_ID = 'com.pawtrack.app';
 
 const config: ExpoConfig = {
-  name: 'Paws Journal',
-  slug: 'paws-journal',
+  name: 'PawTrack',
+  slug: 'pawtrack',
   version: '1.0.0',
   orientation: 'portrait',
-  scheme: 'pawsjournal', // enables deep links, required by expo-router
+  scheme: 'pawtrack', // enables deep links, required by expo-router
   userInterfaceStyle: 'light',
 
   icon: './assets/icon.png',
@@ -41,18 +41,18 @@ const config: ExpoConfig = {
     // crash the one feature owners use mid-emergency.
     infoPlist: {
       NSCameraUsageDescription:
-        "Paws Journal uses the camera so you can record video of your dog's seizure to show your veterinarian.",
+        "PawTrack uses the camera so you can record video of your dog's seizure to show your veterinarian.",
       NSMicrophoneUsageDescription:
-        "Paws Journal records audio with seizure videos, because vocalisation can be clinically relevant.",
+        "PawTrack records audio with seizure videos, because vocalisation can be clinically relevant.",
       NSPhotoLibraryUsageDescription:
-        'Paws Journal lets you attach a video you already recorded to a seizure record.',
+        'PawTrack lets you attach a video you already recorded to a seizure record.',
       // ADD-ONLY, and deliberately separate from the string above. Saving a
       // seizure video back to Photos does not require the ability to read the
       // owner's library, and iOS shows a materially gentler prompt for
       // add-only access — so the narrower ask also gets granted more often.
       // expo-media-library is requested with writeOnly: true to match.
       NSPhotoLibraryAddUsageDescription:
-        'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
+        'PawTrack saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
       // expo-local-authentication, for the OPT-IN app lock in Settings.
       //
       // This is a device lock, not a session policy. It protects the records
@@ -61,7 +61,7 @@ const config: ExpoConfig = {
       // moment. An app that demands re-authentication at 3am has failed at the
       // one moment it exists for.
       NSFaceIDUsageDescription:
-        'Paws Journal can use Face ID to unlock your dog\u2019s health records.',
+        'PawTrack can use Face ID to unlock your dog\u2019s health records.',
       // NOTE: there is deliberately NO UIBackgroundModes entry here.
       // The seizure timer does not need one — elapsed time is derived from an
       // absolute start timestamp and recomputed the instant the app returns to
@@ -118,9 +118,12 @@ const config: ExpoConfig = {
    * treats an over-broad Data Safety declaration as a policy violation in the
    * other direction.
    *
-   * Removed until they have real importers:
-   *   expo-camera — no imports; video capture goes through expo-image-picker's
-   *                 system camera by design
+   * expo-camera has NO plugin entry and needs none — but it IS imported, and
+   * the claim that it has "no importers" was wrong: videoService.ts calls
+   * CameraView.getAvailableVideoCodecsAsync() to detect a simulator with no
+   * capture device before opening the picker. It needs no plugin because the
+   * view is never rendered, only queried. Do not drop the dependency on the
+   * assumption that nothing uses it.
    *
    * expo-notifications EARNED ITS ENTRY BACK in the medication-reminder change:
    * src/services/medicationReminders.ts schedules repeating daily reminders.
@@ -143,7 +146,7 @@ const config: ExpoConfig = {
       'expo-image-picker',
       {
         photosPermission:
-          'Paws Journal lets you attach a video you already recorded to a seizure record.',
+          'PawTrack lets you attach a video you already recorded to a seizure record.',
       },
     ],
     'expo-sqlite',
@@ -151,12 +154,12 @@ const config: ExpoConfig = {
       'expo-media-library',
       {
         savePhotosPermission:
-          'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
+          'PawTrack saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
         // We never read the library through this module — video IMPORT goes
         // through expo-image-picker, which has its own narrower prompt. Asking
         // for read access here would be scope we do not use.
         photosPermission:
-          'Paws Journal saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
+          'PawTrack saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
         isAccessMediaLocationEnabled: false,
       },
     ],
@@ -190,8 +193,32 @@ const config: ExpoConfig = {
 
   extra: {
     eas: {
-      // Filled in automatically the first time you run `eas init`.
-      projectId: process.env.EAS_PROJECT_ID ?? undefined,
+      /**
+       * The EAS project this app builds under: @pawtrack2/pawtrack.
+       *
+       * ── WHY THIS IS COMMITTED AND NOT READ FROM .env ──────────────────
+       *
+       * It used to be `process.env.EAS_PROJECT_ID ?? undefined`, with a note
+       * saying `eas init` would fill it in. Neither half worked:
+       *
+       *   - `eas init` CANNOT write into a dynamic `app.config.ts`. It edits
+       *     `app.json`, which this project does not have.
+       *   - `eas-cli` does not load `.env` when it evaluates the config. Only
+       *     the Expo dev server does. So putting the id in `.env` left every
+       *     `eas` command failing with "EAS project not configured", and the
+       *     only thing that worked was prefixing the variable by hand on every
+       *     invocation.
+       *
+       * The id is a PUBLIC identifier — it ships in the app bundle, appears in
+       * every EAS build URL, and grants nothing on its own. Committing it is
+       * what the Expo docs do and what makes `eas build` work on a fresh
+       * clone and in CI without extra setup.
+       *
+       * The env var still wins when it is set, so a fork can point at its own
+       * project without editing this file.
+       */
+      projectId:
+        process.env.EAS_PROJECT_ID ?? '1d820947-6403-4204-a688-da3978a13415',
     },
 
     /**

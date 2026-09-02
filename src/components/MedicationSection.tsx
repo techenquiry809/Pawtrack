@@ -22,7 +22,7 @@ import { Alert, Linking, Pressable, StyleSheet, Switch, Text, View } from 'react
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import {
-  Body, Button, Card, EmptyState, Heading, Muted, Pill, type PillTone,
+  Button, Card, EmptyState, Heading, Muted, Pill, type PillTone,
 } from '@/components/ui';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { Icon } from '@/components/Icon';
@@ -146,7 +146,7 @@ export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: 
           <Muted style={{ marginTop: 6 }}>
             Your medication list and dose history still work exactly as before —
             only the alerts are silent. To turn them on, open Settings,
-            find Paws Journal, and allow notifications.
+            find PawTrack, and allow notifications.
           </Muted>
           <Button
             label="Open Settings"
@@ -186,7 +186,7 @@ export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: 
       />
 
       <Muted style={styles.footNote}>
-        Paws Journal records what you and your veterinarian decide. It never
+        PawTrack records what you and your veterinarian decide. It never
         suggests a medication or an amount.
       </Muted>
     </>

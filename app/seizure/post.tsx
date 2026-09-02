@@ -30,7 +30,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card, Muted, Pill } from '@/components/ui';
 import { StepShell } from '@/components/StepShell';
@@ -50,11 +49,9 @@ import { useActiveDog } from '@/store/appStore';
 import * as seizureRepo from '@/db/seizureRepo';
 import { formatDuration, formatInterval } from '@/utils/time';
 
-const STEPS = ['During', 'Afterwards', 'Recovery'];
 
 export default function PostSeizureScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
 
   const dog = useActiveDog();
   const draft = useActiveSeizure((s) => s.draft);
@@ -265,8 +262,6 @@ function TimeMark({ label, epochMs }: { label: string; epochMs: number | null })
 
 const styles = StyleSheet.create({
   alreadyCard: { marginBottom: spacing.md },
-  screen: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
 
   durationRow: {
     flexDirection: 'row',
@@ -312,5 +307,4 @@ const styles = StyleSheet.create({
   },
 
   since: { marginTop: spacing.md },
-  footNote: { textAlign: 'center' },
 });

@@ -54,7 +54,7 @@ import {
 } from '@/theme/tokens';
 import * as checkinRepo from '@/db/checkinRepo';
 import { useActiveDog } from '@/store/appStore';
-import { localDayKey } from '@/utils/time';
+import { formatFullDate, localDayKey } from '@/utils/time';
 import type { DailyCheckin } from '@/types/domain';
 
 type Appetite = DailyCheckin['appetite'];
@@ -155,9 +155,7 @@ export default function CheckinFlowScreen() {
   const dayLabel = useMemo(
     () => (isToday
       ? 'Today'
-      : new Date(`${targetDate}T12:00:00`).toLocaleDateString(undefined, {
-          weekday: 'long', day: 'numeric', month: 'long',
-        })),
+      : formatFullDate(new Date(`${targetDate}T12:00:00`).getTime())),
     [isToday, targetDate],
   );
 

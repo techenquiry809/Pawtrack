@@ -20,7 +20,7 @@
  * Pure, and free of runtime `@/` imports so it can be tested. Types only.
  */
 
-import type { DailyCheckin } from '@/types/domain';
+import type { DailyCheckin, MedicationWithReminders } from '@/types/domain';
 import type { ReportRange } from './range';
 import type { DoseWithName, ReportData, SeizureWithClips } from './collect';
 
@@ -63,6 +63,8 @@ export type ReportSummary = {
   checkins: DailyCheckin[];
   seizures: SeizureWithClips[];
   doseRows: DoseWithName[];
+  /** The prescribed regimen, as it stands now. See ReportData.medications. */
+  medications: MedicationWithReminders[];
   videoCount: number;
   /** True when nothing at all was recorded. A valid report, not an error. */
   isEmpty: boolean;
@@ -195,10 +197,15 @@ export function summarizeReport(
     checkins: data.checkins,
     seizures: data.seizures,
     doseRows: data.doses,
+    medications: data.medications,
     videoCount,
     // "Nothing happened" is a finding, not a failure. A quiet week is often
     // the single most useful thing a report can tell a vet, so this flag
     // changes the wording rather than suppressing the document.
+    //
+    // The regimen is deliberately NOT part of this test. A dog on three drugs
+    // with nothing logged this week has an empty PERIOD, and saying otherwise
+    // because a medication exists on file would hide exactly that finding.
     isEmpty:
       data.seizures.length === 0 &&
       data.doses.length === 0 &&

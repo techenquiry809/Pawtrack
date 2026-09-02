@@ -34,6 +34,8 @@ export type OutboxEntry = {
   queuedAt: number;
   attempts: number;
   lastError: string | null;
+  /** When the last push attempt was made. Null until one fails. See isDue. */
+  lastAttemptAt: number | null;
 };
 
 /**
@@ -97,9 +99,49 @@ export async function enqueueMany(
  * that can move backwards under an NTP correction — the same reason
  * src/utils/clock.ts refuses to time a seizure with it.
  */
+/**
+ * Exponential backoff for an entry that keeps failing, capped at ~5 minutes.
+ *
+ * Capped LOW on purpose: this app's whole value is that a record reaches the
+ * account. An hour-long backoff on a phone that is only occasionally awake
+ * means a seizure logged this morning is still on one device tonight.
+ *
+ * ── WHY THIS IS BACK ──────────────────────────────────────────────────
+ *
+ * It existed, was never called, and was deleted as dead code. That deletion
+ * was correct and the audit that found it was reporting a real gap: `attempts`
+ * was being incremented and never read, so every trigger re-sent the same
+ * failing batch at full rate. Today the triggers are foreground and
+ * reconnect-transition only, so nothing spins — but the first retry-on-failure
+ * trigger anyone adds turns that into a hot loop against a server that is
+ * already refusing.
+ */
+export function backoffMs(attempts: number): number {
+  return Math.min(300_000, 2_000 * 2 ** Math.min(attempts, 8));
+}
+
+/**
+ * May this entry be retried yet?
+ *
+ * Pure and exported so the window can be tested without a database — the same
+ * reason features/report/range.ts and store/authThrottle.ts are split out.
+ *
+ * A never-attempted entry is always due. `lastAttemptAt` is null for every row
+ * queued before migration 12, so those stay due too: an upgrade must not
+ * silently park a queue that was already waiting to drain.
+ */
+export function isDue(
+  entry: { attempts: number; lastAttemptAt: number | null },
+  now: number,
+): boolean {
+  if (entry.attempts <= 0 || entry.lastAttemptAt === null) return true;
+  return now >= entry.lastAttemptAt + backoffMs(entry.attempts);
+}
+
 export async function peek(
   db: SQLiteDatabase,
   limit = 200,
+  now = Date.now(),
 ): Promise<OutboxEntry[]> {
   const rows = await db.getAllAsync<{
     id: number;
@@ -109,17 +151,30 @@ export async function peek(
     queued_at: number;
     attempts: number;
     last_error: string | null;
+    last_attempt_at: number | null;
   }>(`SELECT * FROM outbox ORDER BY id LIMIT ?`, [limit]);
 
-  return rows.map((r) => ({
-    id: r.id,
-    tableName: r.table_name,
-    rowId: r.row_id,
-    op: r.op,
-    queuedAt: r.queued_at,
-    attempts: r.attempts,
-    lastError: r.last_error,
-  }));
+  return rows
+    .map((r) => ({
+      id: r.id,
+      tableName: r.table_name,
+      rowId: r.row_id,
+      op: r.op,
+      queuedAt: r.queued_at,
+      attempts: r.attempts,
+      lastError: r.last_error,
+      lastAttemptAt: r.last_attempt_at,
+    }))
+    // Backing-off entries are filtered AFTER the limit, not in the SQL, so the
+    // backoff curve has exactly one definition (backoffMs) instead of a second
+    // copy written in SQLite arithmetic that could drift from it.
+    //
+    // The cost is that a head-of-queue batch which is entirely backing off
+    // yields an empty batch even if a due entry sits past the limit. That is
+    // the CORRECT outcome here rather than a limitation: `sync_push` is
+    // all-or-nothing, so recordFailure marks the whole batch, and a batch
+    // whose head is waiting should wait.
+    .filter((e) => isDue(e, now));
 }
 
 /** Clear a drained batch. Called only after the server confirmed the push. */
@@ -148,9 +203,9 @@ export async function recordFailure(
   if (entryIds.length === 0) return;
   const holes = entryIds.map(() => '?').join(',');
   await db.runAsync(
-    `UPDATE outbox SET attempts = attempts + 1, last_error = ?
+    `UPDATE outbox SET attempts = attempts + 1, last_error = ?, last_attempt_at = ?
       WHERE id IN (${holes})`,
-    [message.slice(0, 500), ...entryIds],
+    [message.slice(0, 500), Date.now(), ...entryIds],
   );
 }
 
@@ -160,15 +215,4 @@ export async function pendingCount(db: SQLiteDatabase): Promise<number> {
     'SELECT COUNT(*) AS n FROM outbox',
   );
   return row?.n ?? 0;
-}
-
-/**
- * Exponential backoff for a batch that keeps failing, capped at ~5 minutes.
- *
- * Capped low on purpose: this app's whole value is that a record reaches the
- * account. An hour-long backoff on a phone that is only occasionally awake
- * means a seizure logged this morning is still on one device tonight.
- */
-export function backoffMs(attempts: number): number {
-  return Math.min(300_000, 2_000 * 2 ** Math.min(attempts, 8));
 }

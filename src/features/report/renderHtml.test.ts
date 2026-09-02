@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import {
   esc,
   fmtClock,
+  fmtClockIfKnown,
   fmtDuration,
   renderReportHtml,
   reportFileName,
@@ -81,6 +82,19 @@ test('clock times are zero-padded to 24h', () => {
   assert.equal(fmtClock(new Date(2026, 7, 30, 23, 59).getTime()), '23:59');
 });
 
+test('a record with no stated time prints no time, not midnight', () => {
+  // A blank time is stored as the start of that day. Printing it would put
+  // "00:00" on a vet report, indistinguishable from a seizure genuinely
+  // observed at midnight — the confusion this whole confidence field exists to
+  // prevent. `timingNote` still states the provenance in words.
+  const midnight = new Date(2026, 7, 30, 0, 0).getTime();
+  assert.equal(fmtClockIfKnown(midnight, 'unknown'), '');
+  assert.equal(fmtClockIfKnown(midnight, 'approximate'), '00:00');
+  assert.equal(fmtClockIfKnown(new Date(2026, 7, 30, 8, 4).getTime(), 'exact'), '08:04');
+  // A real midnight seizure the owner DID time must still print.
+  assert.equal(fmtClockIfKnown(midnight, 'exact'), '00:00');
+});
+
 test('every seizure gets a timing marker, including the good ones', () => {
   // A marker that appeared only on bad rows would make its absence ambiguous.
   assert.equal(timingNote({ durationConfidence: 'high', retrospective: false }), 'timed live');
@@ -99,26 +113,26 @@ test('every seizure gets a timing marker, including the good ones', () => {
 /* ------------------------------------------------------------------ */
 
 test('a slash in a pet name cannot become a path separator', () => {
-  const name = reportFileName('Lucy/Bear', resolveRange('day', '2026-08-30'), '2026-08-30');
+  const name = reportFileName('Lucy/Bear', '2026-08-30');
   assert.ok(!name.includes('/'), name);
   assert.equal(name, 'PawTrack-Lucy-Bear-2026-08-30.pdf');
 });
 
 test('emoji and punctuation are stripped but letters survive', () => {
   assert.equal(
-    reportFileName('Lucy 🐕 Jr.', resolveRange('day', '2026-08-30'), '2026-08-30'),
+    reportFileName('Lucy 🐕 Jr.', '2026-08-30'),
     'PawTrack-Lucy-Jr-2026-08-30.pdf',
   );
   // Non-Latin names must not be erased into nothing.
   assert.equal(
-    reportFileName('ルーシー', resolveRange('day', '2026-08-30'), '2026-08-30'),
+    reportFileName('ルーシー', '2026-08-30'),
     'PawTrack-ルーシー-2026-08-30.pdf',
   );
 });
 
 test('a name made only of symbols still yields a usable file', () => {
   assert.equal(
-    reportFileName('///', resolveRange('day', '2026-08-30'), '2026-08-30'),
+    reportFileName('///', '2026-08-30'),
     'PawTrack-Dog-2026-08-30.pdf',
   );
 });
@@ -127,7 +141,24 @@ test('a name made only of symbols still yields a usable file', () => {
 /* The whole document                                                  */
 /* ------------------------------------------------------------------ */
 
-const emptySummary = (scope: 'day' | 'week' = 'day') => ({
+/**
+ * A dog with nothing filled in beyond the required fields.
+ *
+ * Deliberately sparse: the profile block must print only what the owner
+ * actually entered, so the fixture that proves it has to be mostly empty.
+ */
+const bareDog = {
+  id: 'd1', name: 'Lucy', photoUri: '', sex: '', ageYears: null, weightKg: null,
+  dob: '', diagnosisStatus: 'suspected', firstSeizureDate: '', seizureType: '',
+  allergies: '', diet: '',
+  breed: { breedId: '', breedName: '', breedSource: '', userEnteredDescription: '' },
+  vet: { name: '', clinic: '', phone: '' },
+  emergencyVet: { name: '', clinic: '', phone: '' },
+  emergencyPlan: {},
+  createdAt: 0, updatedAt: 0,
+};
+
+const emptySummary = (scope: 'day' | 'week' | 'month' | 'all' = 'day') => ({
   range: resolveRange(scope, '2026-08-30'),
   seizureCount: 0,
   duration: {
@@ -140,6 +171,7 @@ const emptySummary = (scope: 'day' | 'week' = 'day') => ({
   checkins: [],
   seizures: [],
   doseRows: [],
+  medications: [],
   videoCount: 0,
   isEmpty: true,
   generatedAt: new Date(2026, 7, 30, 21, 4).getTime(),
@@ -148,6 +180,7 @@ const emptySummary = (scope: 'day' | 'week' = 'day') => ({
 test('a hostile dog name cannot inject markup into the document', () => {
   const html = renderReportHtml({
     summary: emptySummary() as never,
+    dog: bareDog as never,
     dogName: '<script>alert("xss")</script>',
     breedLabel: '"><img src=x onerror=alert(1)>',
     rangeLabel: 'Sunday 30 Aug 2026',
@@ -168,6 +201,7 @@ test('a hostile dog name cannot inject markup into the document', () => {
 test('a quiet day produces a real document that says so', () => {
   const html = renderReportHtml({
     summary: emptySummary() as never,
+    dog: bareDog as never,
     dogName: 'Lucy',
     breedLabel: 'Labrador Retriever',
     rangeLabel: 'Sunday 30 Aug 2026',
@@ -182,6 +216,7 @@ test('a quiet day produces a real document that says so', () => {
 test('every document carries the brand and the disclaimer', () => {
   const html = renderReportHtml({
     summary: emptySummary() as never,
+    dog: bareDog as never,
     dogName: 'Lucy',
     breedLabel: 'Labrador Retriever',
     rangeLabel: 'Sunday 30 Aug 2026',
@@ -201,6 +236,7 @@ test('the exclusion caveat appears whenever anything was left out', () => {
   };
   const html = renderReportHtml({
     summary: summary as never,
+    dog: bareDog as never,
     dogName: 'Lucy',
     breedLabel: 'Labrador Retriever',
     rangeLabel: 'Sunday 30 Aug 2026',
@@ -225,6 +261,7 @@ test('when NOTHING was usable the caveat explains the dashes instead', () => {
   };
   const html = renderReportHtml({
     summary: summary as never,
+    dog: bareDog as never,
     dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'Sunday 30 Aug 2026',
   });
   assert.ok(!html.includes('median and total of 0'), 'nonsense wording shipped');
@@ -242,6 +279,7 @@ test('no caveat is printed when every record was trustworthy', () => {
   };
   const html = renderReportHtml({
     summary: summary as never,
+    dog: bareDog as never,
     dogName: 'Lucy',
     breedLabel: 'Labrador Retriever',
     rangeLabel: 'Sunday 30 Aug 2026',
@@ -252,12 +290,152 @@ test('no caveat is printed when every record was trustworthy', () => {
 test('a week report renders a seven-bar day strip; a day report does not', () => {
   const week = renderReportHtml({
     summary: emptySummary('week') as never,
+    dog: bareDog as never,
     dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: '24 – 30 Aug 2026',
   });
   const day = renderReportHtml({
     summary: emptySummary('day') as never,
+    dog: bareDog as never,
     dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'Sunday 30 Aug 2026',
   });
   assert.equal((week.match(/class="bar"/g) ?? []).length, 7);
   assert.ok(!day.includes('class="bar"'));
+});
+
+/* ------------------------------------------------------------------ */
+/* Branding, medication and check-ins                                  */
+/* ------------------------------------------------------------------ */
+
+test('the logo is vector and self-contained, never a broken image', () => {
+  const html = renderReportHtml({
+    summary: emptySummary() as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'Sunday 30 Aug 2026',
+  });
+  // expo-print renders the HTML with no base URL, so any <img src="./..."> is
+  // a broken-image box in the PDF. The mark has to carry its own pixels.
+  assert.ok(html.includes('<svg'), 'the logo should be inline SVG');
+  assert.ok(html.includes('aria-label="PawTrack"'));
+  assert.ok(!/<img[^>]+src=["']\.?\//.test(html), 'a relative image src would print broken');
+});
+
+test('a mood-only check-in prints its energy and NOTHING else', () => {
+  // The row exists because someone tapped one face on the dashboard. Every
+  // other column holds a schema default nobody answered; printing them would
+  // manufacture clinical observations out of a single tap.
+  const summary = {
+    ...emptySummary(),
+    checkins: [{
+      id: 'c1', dogId: 'd1', timestamp: 0, checkInDate: '2026-08-30',
+      sleepHrs: null, appetite: 'normal', water: 'normal', energy: 5, stress: 2,
+      medOnTime: true, gi: 'none', unusual: '', backfilled: false, moodOnly: true,
+      createdAt: 0, updatedAt: 0,
+    }],
+  };
+  const html = renderReportHtml({
+    summary: summary as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'Sunday 30 Aug 2026',
+  });
+  assert.ok(html.includes('Bouncy'), 'the real value should print');
+  assert.ok(html.includes('energy only'), 'the row must be marked as partial');
+  assert.ok(html.includes('never answered'), 'the footnote must explain the dashes');
+  // The defaults must not appear as if they were observations.
+  const row = html.slice(html.indexOf('2026-08-30'), html.indexOf('energy only'));
+  assert.ok(!row.includes('normal'), 'a default was printed as an observation');
+});
+
+test('a full check-in prints every field it was actually given', () => {
+  const summary = {
+    ...emptySummary(),
+    checkins: [{
+      id: 'c1', dogId: 'd1', timestamp: 0, checkInDate: '2026-08-30',
+      sleepHrs: 7.5, appetite: 'decreased', water: 'increased', energy: 2, stress: 4,
+      medOnTime: false, gi: 'vomit', unusual: 'off her food', backfilled: false,
+      moodOnly: false, createdAt: 0, updatedAt: 0,
+    }],
+  };
+  const html = renderReportHtml({
+    summary: summary as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'Sunday 30 Aug 2026',
+  });
+  for (const v of ['decreased', 'increased', 'vomit', 'off her food', '4/5', '7.5 h']) {
+    assert.ok(html.includes(v), `missing ${v}`);
+  }
+  assert.ok(!html.includes('energy only'));
+});
+
+test('the prescribed regimen is printed even when no dose was logged', () => {
+  // "Three drugs prescribed, none recorded this week" is a finding. An empty
+  // medication section cannot say it.
+  const summary = {
+    ...emptySummary(),
+    medications: [{
+      id: 'm1', dogId: 'd1', name: 'Phenobarbital', dose: '30', unit: 'mg',
+      frequency: 'Twice daily', prescriber: 'Dr Adeyemi', createdAt: 0, updatedAt: 0,
+      reminders: [{ id: 'r1', medicationId: 'm1', timeHHMM: '08:00', enabled: true }],
+    }],
+    doseRows: [],
+  };
+  const html = renderReportHtml({
+    summary: summary as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'Sunday 30 Aug 2026',
+  });
+  assert.ok(html.includes('Phenobarbital'));
+  assert.ok(html.includes('30 mg'), 'dose and unit should read as one value');
+  assert.ok(html.includes('Twice daily'));
+  assert.ok(html.includes('08:00'), 'reminder times belong in the regimen');
+  assert.ok(html.includes('Dr Adeyemi'));
+  assert.ok(html.includes('No medication recorded in this period.'), 'the dose log still says it is empty');
+});
+
+test('a hostile medication name cannot inject markup', () => {
+  const summary = {
+    ...emptySummary(),
+    medications: [{
+      id: 'm1', dogId: 'd1', name: '<script>x</script>', dose: '"><b>', unit: '',
+      frequency: '', prescriber: '', createdAt: 0, updatedAt: 0, reminders: [],
+    }],
+  };
+  const html = renderReportHtml({
+    summary: summary as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'x',
+  });
+  assert.ok(!html.includes('<script>x</script>'));
+  assert.ok(html.includes('&lt;script&gt;'));
+});
+
+test('an all-time strip aggregates into months instead of drawing 900 bars', () => {
+  // A per-day strip over years is a smear, not a chart.
+  const summary = emptySummary('all');
+  const long = {
+    ...summary,
+    days: Array.from({ length: 400 }, (_, i) => ({
+      dayKey: `2025-${String((i % 12) + 1).padStart(2, '0')}-01`,
+      seizureCount: 0, totalSec: null,
+    })),
+  };
+  const html = renderReportHtml({
+    summary: long as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'All records',
+  });
+  const bars = (html.match(/class="bar"/g) ?? []).length;
+  assert.ok(bars <= 12, `expected month bars, got ${bars}`);
+  assert.ok(html.includes('Seizures per month'));
+});
+
+test('only the profile fields the owner filled in are printed', () => {
+  const html = renderReportHtml({
+    summary: emptySummary() as never,
+    dog: bareDog as never,
+    dogName: 'Lucy', breedLabel: 'Lab', rangeLabel: 'x',
+  });
+  // An empty "Weight —" row invites the reader to believe the dog was weighed.
+  assert.ok(!html.includes('Weight'), 'an unfilled field was printed');
+  assert.ok(!html.includes('Allergies'));
+  assert.ok(!html.includes('Care team'), 'an empty care team should be omitted');
 });

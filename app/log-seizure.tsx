@@ -28,28 +28,29 @@
  * duration the app's own stopwatch measured. The analytics engine and the vet
  * report both read those flags, so a remembered ninety seconds can never be
  * averaged in as though it had been timed.
+ *
+ * The DATE is the only required answer. A clock time is welcome but optional —
+ * an owner who came home to a seizure, or slept through the start of one, has
+ * no hour to give, and the record they can still file beats the one they
+ * abandon. A blank time files the seizure at the start of that day and drops
+ * `timingConfidence` to 'unknown'.
  */
 
 import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Card, Muted } from '@/components/ui';
 import { QuestionLabel, TextArea } from '@/components/form';
 import { StepShell } from '@/components/StepShell';
-import { BackButton } from '@/components/BackButton';
 import { DateTimeField } from '@/components/DateTimeField';
 import {
   AutonomicField,
@@ -70,7 +71,7 @@ import { useActiveDog } from '@/store/appStore';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as videoRepo from '@/db/videoRepo';
 import {
-  importVideos, importVideosFromFiles, type CapturedVideo,
+  importVideos, importVideosFromFiles, thumbnailUri, type CapturedVideo,
 } from '@/services/videoService';
 import { Icon } from '@/components/Icon';
 import { goBackOrHome } from '@/utils/nav';
@@ -81,13 +82,16 @@ const MAX_SECONDS = 6 * 60 * 60;
 
 export default function LogSeizureScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const dog = useActiveDog();
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  // False when the owner gave a date but no clock time. `startedAt` is then the
+  // start of that day, and the record must say so rather than pass midnight off
+  // as an observation.
+  const [timeKnown, setTimeKnown] = useState(true);
   const [durationKnown, setDurationKnown] = useState(true);
   const [minutes, setMinutes] = useState('');
   const [seconds, setSeconds] = useState('');
@@ -135,9 +139,10 @@ export default function LogSeizureScreen() {
     return null;
   })();
 
-  // The time is the only thing genuinely required. Everything else can be
-  // blank — a record that says "it happened on Tuesday evening and I did not
-  // note anything else" is still worth far more than no record.
+  // The date is the only thing genuinely required. Everything else — the
+  // clock time included — can be blank: a record that says "it happened on
+  // Tuesday and I did not note anything else" is still worth far more than no
+  // record.
   const canSave =
     dog !== null &&
     startedAt !== null &&
@@ -204,9 +209,11 @@ export default function LogSeizureScreen() {
         start: startedAt,
         end: known ? startedAt + durationSec * 1000 : null,
         durationSec: known ? durationSec : 0,
-        // 'approximate' when a length was given, 'unknown' when it was not.
-        // Never 'exact' — that is reserved for a duration the app measured.
-        timingConfidence: known ? 'approximate' : 'unknown',
+        // 'approximate' when the owner gave a time and a length, 'unknown'
+        // when either is missing — a start stamped at the top of the day
+        // because no time was given is not an approximation of anything.
+        // Never 'exact': that is reserved for a seizure the app measured.
+        timingConfidence: timeKnown && known ? 'approximate' : 'unknown',
         // Deliberately NOT 'high'. Only the in-app stopwatch earns that.
         durationConfidence: 'unreliable',
         retrospective: true,
@@ -273,7 +280,7 @@ export default function LogSeizureScreen() {
       setError('Could not save this record. Please try again.');
       setSaving(false);
     }
-  }, [dog, startedAt, durationKnown, durationSec, obs, notes, router]);
+  }, [dog, startedAt, timeKnown, durationKnown, durationSec, obs, notes, videos, router]);
 
   if (!dog) return null;
 
@@ -284,30 +291,52 @@ export default function LogSeizureScreen() {
    * stores in: the video first (they came here because of it), then when and
    * how long, then the seizure itself front to back, then anything left over.
    *
-   * Nothing is required except the date, which is checked on its own step so
-   * the owner cannot reach the end and be told to go back.
+   * Nothing is required except the date — not even the time — and it is
+   * checked on its own step so the owner cannot reach the end and be told to
+   * go back.
+   */
+  /*
+   * THREE STEPS, NOT EIGHT.
+   *
+   * The original flow asked one thing per screen — video, date, duration,
+   * movement, awareness, autonomic, before/after, notes. Every question is
+   * optional, so seven of those eight screens could be answered by pressing
+   * Next, and an owner logging a seizure from memory had to press Next eight
+   * times to record two facts. A step is only worth its screen when it asks
+   * something that needs its own decision; "here is a chip row you may skip"
+   * does not.
+   *
+   * They are grouped by WHEN the owner knows the answer rather than by field:
+   *
+   *   1  THE FACTS      the clip, the date, how long — what someone remembers
+   *                     immediately, and the only step with a required field.
+   *   2  WHAT YOU SAW   the observation chips, all of them, one screen.
+   *   3  AROUND IT      before, after, how it looked, notes. Then save.
+   *
+   * Step 1 is deliberately sized to fit without scrolling: it is the step that
+   * carries the one thing the record cannot do without (the date), and a
+   * required field below the fold is how a form gets abandoned.
    */
   const STEP_DEFS = [
-    { title: 'Video', hint: 'If you filmed it. Optional — the record saves either way.' },
-    { title: 'When did it happen?', hint: 'The one thing this record needs.' },
-    { title: 'How long did it last?', hint: '"I am not sure" is a real answer.' },
-    { title: 'Movement', hint: 'What their body was doing.' },
-    { title: 'Awareness and position', hint: 'Whether they were responsive, and how they lay.' },
-    { title: 'Autonomic signs', hint: 'Drooling, wetting, and the like.' },
-    { title: `Before and after`, hint: 'Warning signs, and how they were once it stopped.' },
-    { title: 'Anything else', hint: 'Then save.' },
+    // Kept to ONE line on a narrow phone. At two lines the title alone cost
+    // roughly 100pt and pushed the "I'm not sure" chip under the footer —
+    // which defeats the point of putting these three questions together.
+    { title: 'When and how long', hint: 'Add the clip if you filmed it. Only the date is required.' },
+    { title: 'What you saw', hint: 'Tap anything you remember. Skip what you did not see.' },
+    { title: 'Around the seizure', hint: 'Before, after, and anything else. Then save.' },
   ] as const;
 
   const LAST = STEP_DEFS.length - 1;
-  // Only the date gates progress, and only on its own step. Blocking the very
-  // last button for something asked seven screens ago would be a dead end.
-  const blocked = step === 1 && startedAt === null;
+  // Only the date gates progress, and only on the step that asks for it.
+  // Blocking the final Save for something asked two screens ago is a dead end
+  // the owner cannot see the cause of.
+  const blocked = step === 0 && startedAt === null;
 
   return (
     <StepShell
       steps={STEP_DEFS}
       current={step}
-      subtitle="Logging a past seizure"
+      subtitle="Add a past seizure"
       onBack={() => setStep(step - 1)}
       onNext={() => setStep(step + 1)}
       onClose={() => goBackOrHome(router)}
@@ -317,7 +346,10 @@ export default function LogSeizureScreen() {
       disabled={step === LAST ? !canSave : blocked}
     >
       {step === 0 && (
-        <Card>
+        <>
+        {/* Compact by design: this whole step must fit above the fold, so the
+            video block is a single row rather than a titled card of its own. */}
+        <Card style={styles.videoCard}>
           {videos.length === 0 ? (
             <Muted style={styles.videoHint}>
               If you filmed it, add the clip here.
@@ -326,8 +358,15 @@ export default function LogSeizureScreen() {
             <View style={styles.videoStrip}>
               {videos.map((v, i) => (
                 <View key={v.fileUri} style={styles.videoThumbWrap}>
+                  {/* thumbUri is RELATIVE to the document directory (see
+                      fileStore.ts). Handing that straight to <Image> makes iOS
+                      resolve it against the app BUNDLE, so the tile silently
+                      renders blank — resolve it first. */}
                   {v.thumbUri ? (
-                    <Image source={{ uri: v.thumbUri }} style={styles.videoThumb} />
+                    <Image
+                      source={{ uri: thumbnailUri(v.thumbUri) }}
+                      style={styles.videoThumb}
+                    />
                   ) : (
                     <View style={[styles.videoThumb, styles.videoThumbBlank]} />
                   )}
@@ -353,12 +392,18 @@ export default function LogSeizureScreen() {
             style={styles.videoBtn}
           />
         </Card>
-      )}
 
-      {step === 1 && <DateTimeField value={startedAt} onChange={setStartedAt} />}
+        <DateTimeField
+          value={startedAt}
+          onChange={(epochMs, known) => {
+            setStartedAt(epochMs);
+            setTimeKnown(known);
+          }}
+        />
 
-      {step === 2 && (
-        <>
+        <QuestionLabel hint={'"I\u2019m not sure" is a real answer.'}>
+          How long did it last?
+        </QuestionLabel>
           <View style={styles.durationInputs}>
             <NumberBox
               value={minutes}
@@ -400,20 +445,25 @@ export default function LogSeizureScreen() {
         </>
       )}
 
-      {step === 3 && <MovementField value={obs} on={handlers} />}
-
-      {step === 4 && (
+      {/* Everything the owner actually watched, in one place. These were four
+          separate screens; none of them asks a question that needs the screen
+          to itself. */}
+      {step === 1 && (
         <>
+          <QuestionLabel>Movement</QuestionLabel>
+          <MovementField value={obs} on={handlers} />
           <QuestionLabel>Were they aware of you?</QuestionLabel>
           <AwarenessField value={obs} on={handlers} />
           <QuestionLabel>Body position</QuestionLabel>
           <PositionField value={obs} on={handlers} />
+          <QuestionLabel hint="Drooling, wetting, and the like.">
+            Autonomic signs
+          </QuestionLabel>
+          <AutonomicField value={obs} on={handlers} />
         </>
       )}
 
-      {step === 5 && <AutonomicField value={obs} on={handlers} />}
-
-      {step === 6 && (
+      {step === LAST && (
         <>
           <QuestionLabel hint="Warning signs in the minutes or hours before it started.">
             Anything unusual beforehand?
@@ -425,11 +475,7 @@ export default function LogSeizureScreen() {
             How did it look to you?
           </QuestionLabel>
           <SeverityField value={obs} on={handlers} />
-        </>
-      )}
 
-      {step === LAST && (
-        <>
           <QuestionLabel>Notes</QuestionLabel>
           <TextArea
             value={notes}
@@ -488,6 +534,9 @@ function NumberBox({
 }
 
 const styles = StyleSheet.create({
+  // Tighter than a normal Card: step 1 has to fit three questions above the
+  // fold, and the video row is the one that can afford to give up the space.
+  videoCard: { paddingVertical: spacing.sm },
   videoHint: { marginBottom: spacing.sm },
   videoBtn: { marginTop: spacing.sm },
   videoStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
@@ -510,9 +559,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.ink,
   },
-  screen: { flex: 1, backgroundColor: colors.bg },
-  content: { paddingHorizontal: spacing.lg, gap: spacing.sm },
-  lede: { lineHeight: 21, marginBottom: spacing.sm },
 
   durationInputs: { flexDirection: 'row', gap: spacing.sm },
   numberBox: {
@@ -547,6 +593,5 @@ const styles = StyleSheet.create({
 
   durationEcho: { marginTop: spacing.xs },
   error: { color: colors.redDeep, marginTop: spacing.xs },
-  save: { marginTop: spacing.lg },
   footnote: { lineHeight: 18, marginTop: spacing.sm },
 });

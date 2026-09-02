@@ -263,8 +263,3 @@ export function q(identifier: string): string {
   }
   return `"${identifier}"`;
 }
-
-/** Column list for a SELECT against the local table, correctly quoted. */
-export function selectList(spec: SyncTableSpec): string {
-  return Object.keys(spec.columns).map(q).join(', ');
-}

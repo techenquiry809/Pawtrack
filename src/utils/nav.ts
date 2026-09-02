@@ -9,7 +9,7 @@
  *
  * `back()` is a no-op when there is nothing to pop. That happens whenever a
  * route is the FIRST screen of the session — a deep link, a notification tap,
- * or `pawsjournal://emergency-plan` typed anywhere. The save succeeds, the
+ * or `pawtrack://emergency-plan` typed anywhere. The save succeeds, the
  * button stops spinning, and the screen just sits there: no header, no tab bar,
  * no way out but force-quitting.
  *

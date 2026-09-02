@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Body, Button, Card, Disclaimer, Heading, Muted, Title } from '@/components/ui';
 import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
@@ -9,7 +9,8 @@ import * as dogRepo from '@/db/dogRepo';
 import { useAppStore } from '@/store/appStore';
 import { useAuthStore } from '@/store/authStore';
 import { lastSyncedAt } from '@/services/sync/worker';
-import { BREED_LIST, BREED_SOURCE, SPECIAL_BREEDS, type BreedOption } from '@/constants/breeds';
+import { BREED_SOURCE } from '@/constants/breeds';
+import { useOnboardingDraft } from '@/store/onboardingDraft';
 
 /**
  * First-run onboarding.
@@ -31,8 +32,19 @@ export default function OnboardingScreen() {
   const refreshDogs = useAppStore((s) => s.refreshDogs);
   const setActiveDog = useAppStore((s) => s.setActiveDog);
 
-  const [name, setName] = useState('');
-  const [age, setAge] = useState('');
+  /*
+   * The typed profile lives in a store, not in useState, because the breed
+   * picker returns to this screen and a remount would wipe local state. See
+   * src/store/onboardingDraft.ts for the failure this prevents.
+   */
+  const name = useOnboardingDraft((s) => s.name);
+  const age = useOnboardingDraft((s) => s.age);
+  const chosenBreed = useOnboardingDraft((s) => s.breed);
+  const breedDesc = useOnboardingDraft((s) => s.breedDesc);
+  const setName = useOnboardingDraft((s) => s.setName);
+  const setAge = useOnboardingDraft((s) => s.setAge);
+  const resetDraft = useOnboardingDraft((s) => s.reset);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,14 +93,6 @@ export default function OnboardingScreen() {
     return () => clearInterval(timer);
   }, [authStatus]);
 
-  // The picker hands its choice back through the route, so this screen never
-  // needs to hold a copy of the breed list.
-  const params = useLocalSearchParams<{ breedId?: string; breedDesc?: string }>();
-  const chosenBreed: BreedOption | undefined = params.breedId
-    ? [...SPECIAL_BREEDS, ...BREED_LIST].find((b) => b.breedId === params.breedId)
-    : undefined;
-  const breedDesc = (params.breedDesc ?? '').slice(0, 200);
-
   const onSubmit = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
@@ -117,6 +121,8 @@ export default function OnboardingScreen() {
       });
       await refreshDogs();
       await setActiveDog(id);
+      // The dog exists now; the draft must not survive to prefill a second one.
+      resetDraft();
       router.replace('/(tabs)');
     } catch (e) {
       console.error('[onboarding] create failed', e);
@@ -131,8 +137,13 @@ export default function OnboardingScreen() {
       contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.xl }]}
       keyboardShouldPersistTaps="handled"
     >
-      <View style={styles.logo}><Body style={styles.logoMark}>🐾</Body></View>
-      <Title>Paws Journal</Title>
+      <Image
+        source={require('../assets/icon.png')}
+        style={styles.logo}
+        accessibilityRole="image"
+        accessibilityLabel="PawTrack"
+      />
+      <Title>PawTrack</Title>
       <Muted style={styles.intro}>
         A calm place to record and understand your dog&apos;s seizures — built to be
         fast in the moment, and useful when you talk to your vet.
@@ -223,11 +234,13 @@ export default function OnboardingScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  // The launcher icon itself, corner-rounded to match. This is the first
+  // screen an owner sees and it is the only place the two images sit side by
+  // side in memory — a stand-in here reads as a different app to the one they
+  // just tapped.
   logo: {
-    width: 56, height: 56, borderRadius: radius.card, backgroundColor: colors.teal,
-    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md,
+    width: 56, height: 56, borderRadius: radius.card, marginBottom: spacing.md,
   },
-  logoMark: { fontSize: fontSize.xl, fontFamily: fontFamily.regular },
   intro: { fontSize: fontSize.base, lineHeight: 22, marginVertical: spacing.md, fontFamily: fontFamily.regular },
   label: {
     fontSize: fontSize.xs, fontWeight: '700', letterSpacing: 0.8,

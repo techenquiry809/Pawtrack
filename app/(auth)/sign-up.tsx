@@ -42,7 +42,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Heading, Muted, Title } from '@/components/ui';
 import { AuthField } from '@/components/AuthField';
-import { TextAction } from '@/components/form';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { BackButton } from '@/components/BackButton';
 import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { MIN_PASSWORD_LENGTH, useAuthStore } from '@/store/authStore';
@@ -293,9 +293,22 @@ export default function SignUpScreen() {
           </View>
 
           {error && (
-            <View style={[styles.card, styles.errorCard]}>
-              <Body>{error}</Body>
-            </View>
+            <ErrorNotice
+              title={error.title}
+              body={error.body}
+              onDismiss={() => setError(null)}
+              // The only action on this screen is creating the account, so
+              // retry unambiguously means "submit again".
+              onRetry={
+                error.retryable
+                  ? () => {
+                      setError(null);
+                      void onSubmit();
+                    }
+                  : undefined
+              }
+              retryLabel="Try again"
+            />
           )}
 
           <Button
@@ -346,7 +359,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
-  errorCard: { backgroundColor: colors.redTint, gap: spacing.sm },
   cardBody: { lineHeight: 21 },
   optionalNote: { marginTop: 2 },
   strong: { fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },

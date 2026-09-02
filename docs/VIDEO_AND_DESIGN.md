@@ -220,7 +220,7 @@ Two routes, because they answer different questions:
 
 | Function | Question | Mechanism |
 |---|---|---|
-| `saveVideoToPhone()` | "I want to keep this." | `expo-media-library`, into a **Paws Journal** album |
+| `saveVideoToPhone()` | "I want to keep this." | `expo-media-library`, into a **PawTrack** album |
 | `shareVideo()` | "I want to send this." | `expo-sharing`, the OS share sheet |
 
 The album matters more than it sounds. A seizure video dropped loose into a
@@ -428,7 +428,7 @@ them again.
 8. Records → Gallery → confirm the tile is filed under **yesterday**, with an
    amber **Your date** badge and a `2m 10s` duration badge
 9. Tap the tile → confirm playback, then **Save to my phone** → check Photos for
-   a **Paws Journal** album
+   a **PawTrack** album
 10. Record a live seizure with a video → confirm its gallery tile has **no**
     date badge (it was measured)
 11. Delete a video from the detail screen → confirm the seizure record survives

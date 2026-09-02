@@ -33,7 +33,7 @@ import * as seizureRepo from '@/db/seizureRepo';
 import { deleteVideoAssets, videoFileUri } from '@/services/videoService';
 import { deviceNames } from '@/services/sync/devices';
 import { saveVideoToPhone, shareVideo } from '@/services/mediaExport';
-import { formatDuration, formatInterval } from '@/utils/time';
+import { formatDuration, formatFullDate, formatInterval, hasKnownTime, timeOfDay } from '@/utils/time';
 import { CAPTURE_CONFIDENCE_LABEL, type SeizureWithVideos, type Video } from '@/types/domain';
 
 export default function VideoDetailScreen() {
@@ -185,7 +185,6 @@ export default function VideoDetailScreen() {
   }
 
   const stated = video.captureConfidence !== 'device';
-  const when = new Date(video.timestamp);
 
   return (
     <ScrollView
@@ -197,15 +196,26 @@ export default function VideoDetailScreen() {
     >
       <ScreenHeader
         eyebrow={video.source === 'uploaded' ? 'Added from your phone' : 'Filmed in the app'}
-        title={when.toLocaleDateString(undefined, {
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long',
-        })}
-        subtitle={`${when.toLocaleTimeString(undefined, {
-          hour: 'numeric',
-          minute: '2-digit',
-        })} · ${CAPTURE_CONFIDENCE_LABEL[video.captureConfidence]}`}
+        title={formatFullDate(video.timestamp)}
+        /*
+          The clock time only when there is one, then the provenance label.
+
+          Gated on the SEIZURE's timingConfidence, not the clip's
+          captureConfidence: the clip's timestamp is that seizure's `start`
+          copied at attach time, and captureConfidence is 'owner_stated' on
+          every imported clip — it describes where the DATE came from and
+          cannot say whether an hour was ever given. Reading it here printed
+          "00:00" on every imported video.
+        */
+        subtitle={[
+          timeOfDay(
+            video.timestamp,
+            seizure !== null && hasKnownTime(seizure.timingConfidence),
+          ),
+          CAPTURE_CONFIDENCE_LABEL[video.captureConfidence],
+        ]
+          .filter(Boolean)
+          .join(' · ')}
         action={<BackButton variant="plain" />}
       />
 
@@ -273,7 +283,7 @@ export default function VideoDetailScreen() {
           loading={busy === 'saving'}
           onPress={onSave}
           style={styles.flex}
-          accessibilityHint="Adds this video to your Photos app in a Paws Journal album"
+          accessibilityHint="Adds this video to your Photos app in a PawTrack album"
         />
         <Button
           label={busy === 'sharing' ? 'Opening…' : 'Send'}

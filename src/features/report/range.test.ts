@@ -23,10 +23,13 @@ import { test } from 'node:test';
 import {
   addDaysToKey,
   dayKeyOf,
+  daysBetweenKeys,
+  endOfMonthKey,
   formatRangeLabel,
   rangeFileStem,
   resolveRange,
   startOfDayKey,
+  startOfMonthKey,
   startOfWeekKey,
 } from './range.ts';
 
@@ -184,4 +187,111 @@ test('file stems sort chronologically as plain text', () => {
   assert.equal(a, '2026-08-09');
   assert.ok(a < b);
   assert.equal(rangeFileStem(resolveRange('week', '2026-08-24')), '2026-08-24-to-08-30');
+});
+
+
+/* ------------------------------------------------------------------ */
+/* Months                                                              */
+/* ------------------------------------------------------------------ */
+
+test('a month ends on its real last day, leap years included', () => {
+  assert.equal(endOfMonthKey('2026-08-14'), '2026-08-31');
+  assert.equal(endOfMonthKey('2026-09-01'), '2026-09-30');
+  // The case a month-length table gets wrong. 2028 is a leap year; 2026 is not.
+  assert.equal(endOfMonthKey('2026-02-10'), '2026-02-28');
+  assert.equal(endOfMonthKey('2028-02-10'), '2028-02-29');
+  // December must roll the YEAR, not wrap to month 13 of the same year.
+  assert.equal(endOfMonthKey('2026-12-05'), '2026-12-31');
+});
+
+test('any day in a month produces the same month report', () => {
+  const first = resolveRange('month', '2026-08-01');
+  const middle = resolveRange('month', '2026-08-14');
+  const last = resolveRange('month', '2026-08-31');
+  for (const r of [first, middle, last]) {
+    assert.equal(r.fromKey, '2026-08-01');
+    assert.equal(r.toKey, '2026-08-31');
+    assert.equal(r.dayKeys.length, 31);
+  }
+  // Same forgiveness the week picker has, and the same reason.
+  assert.deepEqual(first.dayKeys, last.dayKeys);
+});
+
+test('a month range is half-open, so months never double-count a seizure', () => {
+  const aug = resolveRange('month', '2026-08-14');
+  const sep = resolveRange('month', '2026-09-14');
+  // August's exclusive end IS September's inclusive start. A seizure at that
+  // exact instant belongs to September and to nothing else.
+  assert.equal(aug.toMs, sep.fromMs);
+  assert.equal(aug.toMs, startOfDayKey('2026-09-01'));
+});
+
+test('February in a leap year enumerates 29 days', () => {
+  assert.equal(resolveRange('month', '2028-02-10').dayKeys.length, 29);
+  assert.equal(resolveRange('month', '2026-02-10').dayKeys.length, 28);
+});
+
+/* ------------------------------------------------------------------ */
+/* All time                                                            */
+/* ------------------------------------------------------------------ */
+
+test('an all-time range spans the first record to the chosen day', () => {
+  const r = resolveRange('all', '2026-09-01', '2026-08-30');
+  assert.equal(r.fromKey, '2026-08-30');
+  assert.equal(r.toKey, '2026-09-01');
+  assert.deepEqual(r.dayKeys, ['2026-08-30', '2026-08-31', '2026-09-01']);
+});
+
+test('all-time with no history is just the chosen day, not 1970', () => {
+  // A dog with nothing recorded must produce an empty report about TODAY.
+  const none = resolveRange('all', '2026-09-01');
+  assert.equal(none.fromKey, '2026-09-01');
+  assert.equal(none.toKey, '2026-09-01');
+  assert.equal(none.dayKeys.length, 1);
+});
+
+test('an earliest key AFTER the chosen day cannot invert the range', () => {
+  // Clock skew or a retrospective record dated in the future. An inverted
+  // range would silently produce a report covering nothing.
+  const r = resolveRange('all', '2026-09-01', '2026-12-25');
+  assert.equal(r.fromKey, '2026-09-01');
+  assert.equal(r.toKey, '2026-09-01');
+  assert.ok(r.toMs > r.fromMs);
+});
+
+test('day counting survives a DST change', () => {
+  // Whatever the runner's zone, a month must enumerate its own length —
+  // millisecond division reports 30.96 days for a 31-day month across a
+  // spring-forward and rounds it to the wrong number.
+  assert.equal(daysBetweenKeys('2026-03-01', '2026-03-31'), 31);
+  assert.equal(daysBetweenKeys('2026-10-01', '2026-10-31'), 31);
+  assert.equal(daysBetweenKeys('2026-08-30', '2026-08-30'), 1);
+});
+
+/* ------------------------------------------------------------------ */
+/* Labels and file names                                               */
+/* ------------------------------------------------------------------ */
+
+test('a month names itself rather than printing its own end points', () => {
+  assert.equal(formatRangeLabel(resolveRange('month', '2026-08-14')), 'August 2026');
+});
+
+test('an all-time label says what "all" turned out to mean', () => {
+  const label = formatRangeLabel(resolveRange('all', '2026-09-01', '2024-03-12'));
+  assert.ok(label.startsWith('All records'), label);
+  // The span matters: "everything" is only meaningful once the reader knows
+  // whether the records start two years ago or two weeks ago.
+  assert.ok(label.includes('2024'), label);
+  assert.ok(label.includes('Sep'), label);
+});
+
+test('file stems sort chronologically and say which period they are', () => {
+  assert.equal(rangeFileStem(resolveRange('day', '2026-08-30')), '2026-08-30');
+  assert.equal(rangeFileStem(resolveRange('month', '2026-08-14')), '2026-08');
+  assert.equal(rangeFileStem(resolveRange('all', '2026-09-01', '2024-03-12')), 'all-to-2026-09-01');
+});
+
+test('startOfMonthKey keeps the year and month it was given', () => {
+  assert.equal(startOfMonthKey('2026-12-31'), '2026-12-01');
+  assert.equal(startOfMonthKey('2026-01-01'), '2026-01-01');
 });

@@ -7,7 +7,7 @@ project up later, read this first.
 
 ## The one rule that outranks everything
 
-Paws Journal is a **tracking and decision-support tool, not a diagnostic
+PawTrack is a **tracking and decision-support tool, not a diagnostic
 tool.** The app must never claim a food, activity, medication or stressor
 *caused* a seizure because a correlation showed up. Use "associated with",
 "pattern observed", "possible association".

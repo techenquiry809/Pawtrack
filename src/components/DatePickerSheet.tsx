@@ -412,7 +412,6 @@ const YEAR_SPAN = 30;
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   pressed: { opacity: 0.7 },
-  disabled: { opacity: 0.3 },
 
   scrim: {
     flex: 1,

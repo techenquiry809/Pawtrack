@@ -46,6 +46,7 @@ import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from 
 import { goBackOrHome } from '@/utils/nav';
 import { BackButton } from '@/components/BackButton';
 import { useActiveDog, useAppStore } from '@/store/appStore';
+import { useOnboardingDraft } from '@/store/onboardingDraft';
 import * as dogRepo from '@/db/dogRepo';
 import { Icon } from '@/components/Icon';
 import {
@@ -70,9 +71,10 @@ export default function BreedPickerScreen() {
   const refreshDogs = useAppStore((s) => s.refreshDogs);
 
   // Onboarding opens this BEFORE a dog row exists, so there is nothing to
-  // update — the choice is handed back through the route instead.
+  // update — the choice is handed back through the draft store instead.
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const isOnboarding = returnTo === 'onboarding';
+  const setDraftBreed = useOnboardingDraft((s) => s.setBreed);
 
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<BreedOption | null>(null);
@@ -100,17 +102,19 @@ export default function BreedPickerScreen() {
     if (!selected) return;
 
     if (isOnboarding) {
-      // Hand the structured choice back. The description travels separately so
-      // the two never merge into one free-text field.
-      router.replace({
-        pathname: '/onboarding',
-        params: {
-          breedId: selected.breedId,
-          breedDesc: needsDescription
-            ? description.trim().slice(0, DESCRIPTION_LIMIT)
-            : '',
-        },
-      });
+      // Hand the structured choice back through the draft store, then POP.
+      //
+      // Not `router.replace('/onboarding', …)`: that mounts a second
+      // onboarding screen, which reinitialises its state and throws away the
+      // name the owner had already typed. `back()` returns to the screen that
+      // is still sitting on the stack, with its fields intact. The description
+      // travels as its own field so the two never merge into one free-text
+      // value.
+      setDraftBreed(
+        selected,
+        needsDescription ? description.trim().slice(0, DESCRIPTION_LIMIT) : '',
+      );
+      router.back();
       return;
     }
 

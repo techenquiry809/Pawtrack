@@ -735,15 +735,7 @@ const styles = StyleSheet.create({
   bannerCrit: { backgroundColor: colors.red },
   bannerCritText: { color: '#fff', flex: 1, fontWeight: '700', fontFamily: fontFamily.bold },
 
-  centreNote: { textAlign: 'center', marginTop: spacing.sm },
   safetyNote: { textAlign: 'center', marginTop: spacing.xl },
-  videoCount: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
 
   callRow: { flexDirection: 'row', gap: spacing.sm },
 });

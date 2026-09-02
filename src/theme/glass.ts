@@ -33,9 +33,15 @@ export function useGlassSupport(): boolean {
     if (!AVAILABLE) return;
 
     let cancelled = false;
-    void AccessibilityInfo.isReduceTransparencyEnabled().then((on) => {
-      if (!cancelled) setReduceTransparency(on);
-    });
+    void AccessibilityInfo.isReduceTransparencyEnabled()
+      .then((on) => {
+        if (!cancelled) setReduceTransparency(on);
+      })
+      // Never let an accessibility probe break a screen — the same rule, and
+      // the same one-line catch, as useReducedMotion in ./motion.ts. Without
+      // it a platform that does not implement the probe raises an unhandled
+      // rejection instead of quietly falling back to "transparency is fine".
+      .catch(() => {});
 
     // Fires when the setting is toggled while the app is running.
     const sub = AccessibilityInfo.addEventListener(

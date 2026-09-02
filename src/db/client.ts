@@ -10,6 +10,22 @@ import * as SQLite from 'expo-sqlite';
 import * as Crypto from 'expo-crypto';
 import { runMigrations } from './migrations';
 
+/**
+ * DELIBERATELY NOT RENAMED with the app.
+ *
+ * The app was called Paws Journal until it was renamed to PawTrack, and every
+ * other trace of that name is gone. This one stays, because it is not a name —
+ * it is an address. SQLite opens the file you ask for and CREATES AN EMPTY ONE
+ * if it is not there, so changing this string does not migrate anybody's
+ * records; it silently walks past them. Every seizure, video and check-in on
+ * every device that ever ran the old build would still be sitting in
+ * paws-journal.db, and the app would open a blank database and report no
+ * history — with nothing anywhere saying why.
+ *
+ * Renaming it is possible, but it is a migration (open the old file, copy it,
+ * verify, delete), not an edit. It is not worth writing for a filename no
+ * owner will ever see.
+ */
 const DB_NAME = 'paws-journal.db';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -30,11 +46,6 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
       });
   }
   return dbPromise;
-}
-
-/** Test/debug helper — forces the next getDb() to reopen and re-migrate. */
-export function resetDbHandle(): void {
-  dbPromise = null;
 }
 
 /* ------------------------------------------------------------------ */

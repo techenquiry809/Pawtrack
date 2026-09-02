@@ -41,7 +41,7 @@ import { File, Paths } from 'expo-file-system';
 
 import type { Dog } from '@/types/domain';
 import { breedDisplay } from '@/db/dogRepo';
-import { collectReport } from '@/features/report/collect';
+import { collectReport, earliestRecordDay } from '@/features/report/collect';
 import { summarizeReport } from '@/features/report/summarize';
 import {
   renderReportHtml,
@@ -91,12 +91,17 @@ export async function buildReport(
   scope: ReportScope,
   dayKey: string,
 ): Promise<BuiltReport> {
-  const range = resolveRange(scope, dayKey);
+  // An all-time report needs to know where the history starts, and only the
+  // database knows that — `resolveRange` is pure. One extra query, and only
+  // for the scope that needs it.
+  const earliest = scope === 'all' ? await earliestRecordDay(dog.id, dayKeyOf) : undefined;
+  const range = resolveRange(scope, dayKey, earliest ?? undefined);
   const data = await collectReport(dog, range);
   const summary = summarizeReport(data, dayKeyOf);
 
   const html = renderReportHtml({
     summary,
+    dog,
     dogName: dog.name,
     breedLabel: breedDisplay(dog),
     rangeLabel: formatRangeLabel(range),
@@ -105,7 +110,7 @@ export async function buildReport(
 
   const { uri } = await Print.printToFileAsync({ html });
 
-  const fileName = reportFileName(dog.name, range, rangeFileStem(range));
+  const fileName = reportFileName(dog.name, rangeFileStem(range));
   // Copy rather than move: if the rename fails for any reason the original
   // still exists, and the owner gets an oddly named PDF instead of no PDF.
   const named = new File(Paths.cache, fileName);

@@ -41,8 +41,16 @@ import * as Sharing from 'expo-sharing';
 import { File } from 'expo-file-system';
 import { videoFileUri } from './videoService';
 
-/** The album seizure videos are filed under in the owner's Photos app. */
-export const ALBUM_NAME = 'Paws Journal';
+/**
+ * The album seizure videos are filed under in the owner's Photos app.
+ *
+ * Renamed with the app, unlike the database filename in db/client.ts — the
+ * trade runs the other way here. This string is USER-VISIBLE, sitting in their
+ * Photos app under a brand that no longer exists, and the worst a rename costs
+ * is that clips saved before the change stay in the old album. Nothing is lost
+ * and nothing is hidden: both albums are right there in Photos.
+ */
+export const ALBUM_NAME = 'PawTrack';
 
 export type ExportOutcome =
   | { status: 'saved'; album: string }
@@ -72,7 +80,7 @@ const MISSING_MESSAGE =
   'The video file is no longer on this phone. The record and its observations are still saved.';
 
 /**
- * Saves a video into the owner's Photos app, inside a "Paws Journal" album.
+ * Saves a video into the owner's Photos app, inside a "PawTrack" album.
  *
  * The album matters more than it sounds: a seizure video dropped loose into a
  * camera roll of holiday footage is one the owner will not find again when
@@ -90,7 +98,7 @@ export async function saveVideoToPhone(
     return {
       status: 'denied',
       message:
-        'Paws Journal needs permission to add to your photo library. You can turn that on in Settings › Paws Journal › Photos.',
+        'PawTrack needs permission to add to your photo library. You can turn that on in Settings › PawTrack › Photos.',
     };
   }
 

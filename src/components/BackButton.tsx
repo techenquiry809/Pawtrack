@@ -24,7 +24,7 @@
  *
  * `back()` is a no-op when there is nothing to pop, which happens whenever a
  * route is the first screen of the session — a deep link, a notification tap,
- * `pawsjournal://emergency-plan` typed anywhere. The button would then do
+ * `pawtrack://emergency-plan` typed anywhere. The button would then do
  * nothing at all, on a screen with no other exit.
  *
  * goBackOrHome() falls through to the tabs instead. See src/utils/nav.ts,

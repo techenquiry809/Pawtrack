@@ -693,14 +693,11 @@ export async function getEditHistory(
 /* Videos                                                              */
 /* ------------------------------------------------------------------ */
 /**
- * MOVED. All video SQL now lives in src/db/videoRepo.ts, which also serves the
- * gallery's cross-seizure queries. These re-exports keep the existing call
- * sites (services/saveActiveSeizure.ts, the seizure detail screen) working.
- *
- * Note the SHAPE CHANGE on detachVideo: it now returns both the video path and
- * its poster-frame path, because deleting one without the other leaves a file
- * on the phone that no screen in the app can reach. Callers should hand the
- * whole object to videoService.deleteVideoAssets().
+ * MOVED. All video SQL lives in src/db/videoRepo.ts, which also serves the
+ * gallery's cross-seizure queries. This re-export is the one call site that
+ * has not been migrated: services/saveActiveSeizure.ts. The `detachVideo` and
+ * `listVideos` aliases were dropped — every caller already imports those from
+ * videoRepo directly.
  */
-export { attachVideo, detachVideo, listForSeizure as listVideos } from './videoRepo';
+export { attachVideo } from './videoRepo';
 export type { NewVideoInput, VideoPatch } from './videoRepo';

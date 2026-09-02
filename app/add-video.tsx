@@ -13,11 +13,14 @@
  *
  * expo-image-picker hands back a temp copy of the chosen asset with no
  * reliable original capture date, so there is no honest way to derive when an
- * imported seizure happened. The date field is therefore REQUIRED and the
- * record is written with:
+ * imported seizure happened. The DATE field is therefore required — the clock
+ * time is not, because an owner who found the clip later may genuinely not know
+ * the hour, and a guessed one would be indistinguishable from an observed one.
+ * The record is written with:
  *
  *   retrospective     true              logged after the fact
  *   timingConfidence  'approximate'     the owner recalled it
+ *                     'unknown'         no time given, or no length given
  *   captureConfidence 'owner_stated'    on every video row
  *
  * Three separate signals, because each one is read by a different consumer:
@@ -89,6 +92,10 @@ export default function AddVideoScreen() {
   const [saving, setSaving] = useState(false);
 
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  // False when the owner gave a date but no clock time. `startedAt` is then the
+  // start of that day, and the record must say so rather than pass midnight off
+  // as an observation.
+  const [timeKnown, setTimeKnown] = useState(true);
   const [durationKnown, setDurationKnown] = useState(true);
   const [minutes, setMinutes] = useState('');
   const [seconds, setSeconds] = useState('');
@@ -223,10 +230,12 @@ export default function AddVideoScreen() {
         start: startedAt,
         end: known ? startedAt + durationSec * 1000 : null,
         durationSec: known ? durationSec : 0,
-        // 'approximate' when the owner gave a length, 'unknown' when they did
-        // not. Both are honest; neither is 'exact', which is reserved for a
-        // duration the app itself measured.
-        timingConfidence: known ? 'approximate' : 'unknown',
+        // 'approximate' when the owner gave both a time and a length, 'unknown'
+        // when either is missing — a start stamped at the top of the day
+        // because no time was given is not an approximation of anything. All
+        // honest; none is 'exact', which is reserved for a seizure the app
+        // itself measured.
+        timingConfidence: timeKnown && known ? 'approximate' : 'unknown',
         // Deliberately NOT 'high'. The owner recalled this number; only the
         // in-app stopwatch earns high confidence.
         durationConfidence: 'unreliable',
@@ -287,7 +296,7 @@ export default function AddVideoScreen() {
       );
       setSaving(false);
     }
-  }, [dog, startedAt, durationKnown, durationSec, obs, videos, router]);
+  }, [dog, startedAt, timeKnown, durationKnown, durationSec, obs, videos, router]);
 
   /* -------------------------------------------------------------- */
 
@@ -353,7 +362,13 @@ export default function AddVideoScreen() {
         />
 
         {/* --- 2. When ---------------------------------------------- */}
-        <DateTimeField value={startedAt} onChange={setStartedAt} />
+        <DateTimeField
+          value={startedAt}
+          onChange={(epochMs, known) => {
+            setStartedAt(epochMs);
+            setTimeKnown(known);
+          }}
+        />
 
         {/* --- 3. How long ------------------------------------------ */}
         <SectionRule label="How long did it last?" />
@@ -456,7 +471,7 @@ export default function AddVideoScreen() {
             {videos.length === 0
               ? 'Choose a video to continue.'
               : startedAt === null
-                ? 'Enter the date and time it happened.'
+                ? 'Pick the date it happened.'
                 : 'Check the length you entered.'}
           </Muted>
         ) : null}

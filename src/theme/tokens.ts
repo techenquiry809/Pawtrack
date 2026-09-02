@@ -102,8 +102,6 @@ export const eventColors = {
   checkin: '#0090A0',
 } as const;
 
-export type EventKind = keyof typeof eventColors;
-
 /**
  * Corner radii.
  *

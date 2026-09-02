@@ -16,6 +16,20 @@
  * time, a wheel needs the native dependency this file exists to avoid, and two
  * separately-labelled boxes read better to a screen reader than a spinner.
  *
+ * ── WHY THE TIME IS OPTIONAL ──────────────────────────────────────────
+ *
+ * The date is the thing an owner always knows. The clock time often is not:
+ * they came home to it, or they were woken by it and never looked. Demanding
+ * an hour they do not have leaves them two bad options — abandon the record,
+ * or guess — and a guessed time is the worse outcome, because it enters the
+ * record indistinguishable from an observed one and the cluster detector
+ * reads start times.
+ *
+ * So a blank time is accepted and reported honestly: the instant becomes the
+ * START OF THAT DAY, and `timeKnown` comes back false so the caller can stamp
+ * the record `timingConfidence: 'unknown'` rather than claim midnight. Half a
+ * time is still refused — an hour with no minute is a typo, not an answer.
+ *
  * ── THE TWO REFUSALS ──────────────────────────────────────────────────
  *
  * A future date is rejected, not clamped. A date that does not exist (31
@@ -60,37 +74,52 @@ function partsFrom(epochMs: number): Parts {
 }
 
 /**
- * Parses the six fields into an instant, or explains why it cannot.
+ * Parses the fields into an instant, or explains why it cannot.
  *
  * Returns a message rather than throwing so the caller can render it inline —
  * an owner mid-form should never get an Alert for a typo.
+ *
+ * `timeKnown` is false when the time was left blank. The instant it returns is
+ * then the start of that day, which is a placeholder and not a claim: the
+ * caller is expected to carry the flag into the record rather than let midnight
+ * pass for an observation.
  */
 export function parseParts(
   parts: Parts,
   now: number,
-): { epochMs: number } | { error: string } {
+): { epochMs: number; timeKnown: boolean } | { error: string } {
   const day = Number(parts.day);
   const month = Number(parts.month);
   const year = Number(parts.year);
-  const hour = Number(parts.hour);
-  const minute = Number(parts.minute);
 
   // An empty field must read as MISSING, not as zero. Number('') is 0, which is
-  // finite, so a blank time would otherwise parse silently as midnight and hand
-  // back a perfectly valid instant the owner never entered.
-  if (
-    [parts.day, parts.month, parts.year, parts.hour, parts.minute].some(
-      (raw) => raw.trim() === '',
-    )
-  ) {
-    return { error: 'Fill in the date and time.' };
+  // finite, so a blank day would otherwise parse silently as a real number.
+  if ([parts.day, parts.month, parts.year].some((raw) => raw.trim() === '')) {
+    return { error: 'Pick the date this happened.' };
   }
-  if ([day, month, year, hour, minute].some((n) => !Number.isFinite(n))) {
-    return { error: 'Fill in the date and time.' };
+  if ([day, month, year].some((n) => !Number.isFinite(n))) {
+    return { error: 'Pick the date this happened.' };
   }
   if (parts.year.length !== 4) return { error: 'Use a four-digit year.' };
   if (month < 1 || month > 12) return { error: 'Month must be between 1 and 12.' };
   if (day < 1 || day > 31) return { error: 'Day must be between 1 and 31.' };
+
+  // The time is optional, but only as a pair. One box filled and the other
+  // empty is a half-finished entry, and guessing which half was meant ("08:__"
+  // — eight o'clock? eight minutes past?) is exactly the silent repair this
+  // file refuses everywhere else.
+  const hourRaw = parts.hour.trim();
+  const minuteRaw = parts.minute.trim();
+  const timeKnown = hourRaw !== '' || minuteRaw !== '';
+  if (timeKnown && (hourRaw === '' || minuteRaw === '')) {
+    return { error: 'Give both the hour and the minute, or leave the time blank.' };
+  }
+
+  const hour = timeKnown ? Number(hourRaw) : 0;
+  const minute = timeKnown ? Number(minuteRaw) : 0;
+  if (timeKnown && [hour, minute].some((n) => !Number.isFinite(n))) {
+    return { error: 'Give both the hour and the minute, or leave the time blank.' };
+  }
   if (hour > 23) return { error: 'Hour must be between 0 and 23.' };
   if (minute > 59) return { error: 'Minutes must be between 0 and 59.' };
 
@@ -116,7 +145,7 @@ export function parseParts(
     return { error: 'That is more than ten years ago. Check the year.' };
   }
 
-  return { epochMs };
+  return { epochMs, timeKnown };
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,7 +157,12 @@ export function DateTimeField({
 }: {
   /** Epoch ms, or null while the entry is incomplete or invalid. */
   value: number | null;
-  onChange: (epochMs: number | null) => void;
+  /**
+   * `timeKnown` is false when the owner left the time blank — `epochMs` is
+   * then the start of that day. Callers that write a health record should
+   * carry it through as `timingConfidence: 'unknown'`.
+   */
+  onChange: (epochMs: number | null, timeKnown: boolean) => void;
   label?: string;
 }) {
   // Default to today's DATE with a BLANK TIME, never to "now".
@@ -136,9 +170,9 @@ export function DateTimeField({
   // An owner importing a clip is almost never logging something that happened
   // this minute, and a prefilled current time is the value most likely to be
   // left wrong by accident — it is valid, it is in the past, and it sails
-  // through every check while being a number nobody entered. A blank time
-  // cannot be committed: parseParts refuses it and the caller's Save button
-  // reads that refusal.
+  // through every check while being a number nobody entered. Leaving it empty
+  // costs nothing now that an empty time is a real answer rather than a
+  // blocked one.
   const [parts, setParts] = useState<Parts>(() =>
     value !== null
       ? partsFrom(value)
@@ -155,12 +189,16 @@ export function DateTimeField({
 
   const result = useMemo(() => parseParts(parts, Date.now()), [parts]);
   const error = 'error' in result ? result.error : null;
+  const timeNotGiven = parts.hour.trim() === '' && parts.minute.trim() === '';
 
   // Report upward whenever the parse outcome changes. Reporting null on an
   // invalid entry is deliberate: the caller's Save button reads this value, so
   // a half-typed date can never be committed.
   useEffect(() => {
-    onChange('epochMs' in result ? result.epochMs : null);
+    onChange(
+      'epochMs' in result ? result.epochMs : null,
+      'epochMs' in result ? result.timeKnown : false,
+    );
     // onChange is expected to be stable (useCallback or a setState setter).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
@@ -230,14 +268,14 @@ export function DateTimeField({
         </View>
 
         <View style={styles.group}>
-          <Text style={styles.groupLabel}>Time</Text>
+          <Text style={styles.groupLabel}>Time (optional)</Text>
           <View style={styles.fieldRow}>
             <Segment
               value={parts.hour}
               onChangeText={set('hour')}
               placeholder="HH"
               maxLength={2}
-              accessibilityLabel="Hour, 24-hour clock"
+              accessibilityLabel="Hour, 24-hour clock, optional"
             />
             <Text style={styles.separator}>:</Text>
             <Segment
@@ -245,8 +283,26 @@ export function DateTimeField({
               onChangeText={set('minute')}
               placeholder="MM"
               maxLength={2}
-              accessibilityLabel="Minute"
+              accessibilityLabel="Minute, optional"
             />
+            {(parts.hour !== '' || parts.minute !== '') && (
+              // A typed time has to be removable, or "optional" only holds
+              // until the owner touches the box: clearing two fields by
+              // backspace is fiddly on a number pad and easy to leave half
+              // done, which is the one shape parseParts refuses.
+              <Pressable
+                onPress={() => {
+                  setTouched(true);
+                  setParts((prev) => ({ ...prev, hour: '', minute: '' }));
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear the time"
+                hitSlop={8}
+                style={({ pressed }) => [styles.clearTime, pressed && { opacity: 0.6 }]}
+              >
+                <Icon name="clear" size="sm" color={colors.inkSoft} />
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -272,10 +328,19 @@ export function DateTimeField({
         <Text style={styles.error} accessibilityLiveRegion="polite">
           {error}
         </Text>
+      ) : timeNotGiven ? (
+        // Said plainly, because leaving it blank changes what is stored. The
+        // owner should not discover in the vet report that a time they never
+        // gave is sitting in the record.
+        <Text style={styles.help}>
+          No time needed — leave it blank if you don&rsquo;t know. The record is
+          filed under this date and marked as an unknown time.
+        </Text>
       ) : (
         <Text style={styles.help}>
-          Use a 24-hour clock. An approximate time is fine — it is recorded as
-          your estimate, not as a measurement.
+          Use a 24-hour clock, or leave the time blank if you don&rsquo;t know
+          it. An approximate time is fine — it is recorded as your estimate,
+          not as a measurement.
         </Text>
       )}
     </View>
@@ -366,6 +431,12 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold
   },
   fieldRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  clearTime: {
+    width: MIN_TOUCH_TARGET,
+    minHeight: MIN_TOUCH_TARGET,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dateBtn: {
     flexDirection: 'row',
     alignItems: 'center',

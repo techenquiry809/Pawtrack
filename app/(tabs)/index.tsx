@@ -46,8 +46,10 @@
  * deficiency and stays exactly as it is. What was missing was structure.
  */
 
-import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Animated, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View,
+} from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -57,12 +59,14 @@ import { Body, Card, Disclaimer, Muted, Pill } from '@/components/ui';
 import { SectionRule } from '@/components/form';
 import { Icon, type IconName } from '@/components/Icon';
 import { VideoTile } from '@/components/VideoTile';
-import { MoodFace } from '@/components/MoodFace';
+import { thumbnailUri } from '@/services/videoService';
+import { MoodFace, type MoodReaction } from '@/components/MoodFace';
 import { ClusterAlert } from '@/components/ClusterAlert';
 import { activeCluster } from '@/features/analytics';
 import { seizuresPerDay } from '@/features/analytics/daily';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, shadow, spacing } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
+import { useReducedMotion } from '@/theme/motion';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 import { breedDisplay } from '@/db/dogRepo';
@@ -70,7 +74,7 @@ import { DogAvatar } from '@/components/ProfileHeader';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import * as videoRepo from '@/db/videoRepo';
-import { formatDuration, localDayKey, startOfDay } from '@/utils/time';
+import { formatDuration, hasKnownTime, localDayKey, timeOfDay } from '@/utils/time';
 import type { DailyCheckin, GalleryEntry, Seizure } from '@/types/domain';
 
 const DAY_MS = 86_400_000;
@@ -116,18 +120,36 @@ const ENERGY_STEPS: {
   tint: string;
   ink: string;
   solid: string;
+  /** How the face moves on commit — see MoodFace. */
+  reaction: MoodReaction;
+  /**
+   * The haptic that goes with it.
+   *
+   * Not one shared `selectionAsync()` for all five. The row is answered
+   * without looking on a phone held in one hand at 3am, and the taps at the
+   * two ends of the scale mean opposite things — a soft tick for a flat day
+   * and a success pattern for zoomies lets the hand tell them apart.
+   */
+  haptic: 'light' | 'medium' | 'success';
 }[] = [
-  { icon: 'energy1', name: 'Flat', tint: colors.redTint, ink: colors.redDeep, solid: colors.red },
-  { icon: 'energy2', name: 'Low', tint: colors.amberTint, ink: colors.amberInk, solid: colors.amber },
-  { icon: 'energy3', name: 'Steady', tint: colors.bg, ink: colors.inkSoft, solid: colors.inkSoft },
-  { icon: 'energy4', name: 'Good', tint: colors.tealTint, ink: colors.tealDeep, solid: colors.teal },
-  { icon: 'energy5', name: 'Bouncy', tint: colors.greenTint, ink: colors.greenInk, solid: colors.green },
+  { icon: 'energy1', name: 'Flat', tint: colors.redTint, ink: colors.redDeep, solid: colors.red, reaction: 'settle', haptic: 'light' },
+  { icon: 'energy2', name: 'Low', tint: colors.amberTint, ink: colors.amberInk, solid: colors.amber, reaction: 'sway', haptic: 'light' },
+  { icon: 'energy3', name: 'Steady', tint: colors.bg, ink: colors.inkSoft, solid: colors.inkSoft, reaction: 'pulse', haptic: 'medium' },
+  { icon: 'energy4', name: 'Good', tint: colors.tealTint, ink: colors.tealDeep, solid: colors.teal, reaction: 'hop', haptic: 'medium' },
+  { icon: 'energy5', name: 'Bouncy', tint: colors.greenTint, ink: colors.greenInk, solid: colors.green, reaction: 'celebrate', haptic: 'success' },
 ];
+
+/** @see `pulseStage` in HomeScreen. */
+type PulseStage = 'ask' | 'thanks' | 'gone';
+
+/** How long the confirmation is held before the card collapses. */
+const PULSE_THANKS_MS = 1600;
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { contentClearance } = useChromeMetrics();
+  const reducedMotion = useReducedMotion();
   const dog = useActiveDog();
   const settings = useAppStore((s) => s.settings);
   const startSeizure = useActiveSeizure((s) => s.start);
@@ -136,6 +158,33 @@ export default function HomeScreen() {
   const [videos, setVideos] = useState<GalleryEntry[]>([]);
   const [checkin, setCheckin] = useState<DailyCheckin | null>(null);
   const [loading, setLoading] = useState(true);
+
+  /**
+   * Whether the Daily Pulse card is still on screen.
+   *
+   *   'ask'    today has no answer yet, and the row is the point of the screen
+   *   'thanks' answered just now — the confirmation is held briefly so the
+   *            owner actually reads what was recorded before it leaves
+   *   'gone'   collapsed; everything below has taken the space
+   *
+   * Once the day is answered the card has nothing left to ask, and a card that
+   * only restates a value the owner just chose is the kind of clutter that
+   * pushes the seizure timer down the screen. It is not a dead end: the
+   * Check-in tab edits the same row, and a new day puts the card back.
+   */
+  const [pulseStage, setPulseStage] = useState<PulseStage>('ask');
+  /**
+   * True once the owner has answered IN THIS SESSION.
+   *
+   * `load()` re-runs on every focus and will report a check-in that exists,
+   * which would otherwise let the "already answered, skip the animation"
+   * branch below fire the instant the optimistic write lands — collapsing the
+   * card before the celebration had a frame to play.
+   */
+  const answeredNow = useRef(false);
+  const pulseHeight = useRef(new Animated.Value(1)).current;
+  /** Natural height in points, captured on layout so it can be animated to 0. */
+  const pulseMeasured = useRef(0);
 
   const dogId = dog?.id;
 
@@ -185,6 +234,67 @@ export default function HomeScreen() {
     () => seizuresPerDay(seizures.map((s) => s.start), TREND_DAYS),
     [seizures],
   );
+
+  /*
+   * EVERY HOOK MUST STAY ABOVE THE `if (!dog) return null` BELOW.
+   *
+   * That early return is real — `dog` is null for the frames before the store
+   * hydrates — so a hook placed after it is called on some renders and not on
+   * others, which is the "rendered more hooks than during the previous render"
+   * crash. The collapse effects lived below it briefly and simply never ran.
+   */
+  /**
+   * The first clip filed against each seizure, for the recent-seizures rows.
+   *
+   * Built from the gallery already loaded above rather than with a second
+   * query: `listGallery` returns every clip for the dog joined to its seizure,
+   * so the rows can be labelled without another round trip. A seizure with no
+   * clip is simply absent from the map and renders as it always did.
+   */
+  const clipBySeizure = useMemo(() => {
+    const map = new Map<string, GalleryEntry>();
+    for (const entry of videos) {
+      if (!map.has(entry.video.seizureId)) map.set(entry.video.seizureId, entry);
+    }
+    return map;
+  }, [videos]);
+
+  /**
+   * A day that was already answered before this screen opened starts collapsed.
+   *
+   * No animation here on purpose: nothing just happened, so nothing should
+   * move. Sliding the card away on every launch would animate a change the
+   * owner did not make.
+   */
+  useEffect(() => {
+    if (loading || answeredNow.current) return;
+    setPulseStage(checkin ? 'gone' : 'ask');
+  }, [loading, checkin]);
+
+  /** Hold the confirmation, then collapse and hand the space to the cards below. */
+  useEffect(() => {
+    if (pulseStage !== 'thanks') return;
+
+    const timer = setTimeout(() => {
+      if (reducedMotion) {
+        setPulseStage('gone');
+        return;
+      }
+      Animated.timing(pulseHeight, {
+        toValue: 0,
+        duration: 380,
+        easing: Easing.inOut(Easing.cubic),
+        // Height and margin are layout properties; the native driver cannot
+        // carry them. This is one card collapsing once, not a per-frame
+        // gesture, so the JS-thread cost is not worth designing around.
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (finished) setPulseStage('gone');
+      });
+    }, PULSE_THANKS_MS);
+
+    return () => clearTimeout(timer);
+  }, [pulseStage, reducedMotion, pulseHeight]);
 
   if (!dog) return null;
 
@@ -263,8 +373,23 @@ export default function HomeScreen() {
     if (checkin?.energy === value) return;
 
     if (settings.hapticsEnabled) {
-      void Haptics.selectionAsync();
+      const haptic = ENERGY_STEPS[value - 1]?.haptic ?? 'light';
+      if (haptic === 'success') {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        void Haptics.impactAsync(
+          haptic === 'medium'
+            ? Haptics.ImpactFeedbackStyle.Medium
+            : Haptics.ImpactFeedbackStyle.Light,
+        );
+      }
     }
+
+    // The card now has its answer, so it starts its exit — but only after the
+    // reaction and the confirmation line have had their moment. Set BEFORE the
+    // optimistic write so `load()` returning cannot beat it to the state.
+    answeredNow.current = true;
+    setPulseStage('thanks');
 
     // Optimistic, so the row responds under the finger rather than after a
     // database round trip. `previous` is captured for the rollback below.
@@ -292,6 +417,11 @@ export default function HomeScreen() {
     } catch (e) {
       console.error('[home] energy update failed', e);
       setCheckin(previous);
+      // Nothing was recorded, so the card must not leave. Putting it back to
+      // 'ask' also cancels the collapse timer through the effect's cleanup.
+      answeredNow.current = false;
+      pulseHeight.setValue(1);
+      setPulseStage(previous ? 'gone' : 'ask');
     }
   };
 
@@ -337,7 +467,34 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* --- Daily pulse ----------------------------------------------- */}
+      {/* --- Daily pulse -----------------------------------------------
+          Present only until the day is answered. See `pulseStage`. */}
+      {pulseStage !== 'gone' ? (
+      <Animated.View
+        // Measured once, then driven to 0 on collapse. `maxHeight` rather than
+        // `height` so the card is free to size itself normally beforehand —
+        // pinning a height up front would fight the text reflowing when the
+        // caption changes from the prompt to the confirmation.
+        style={{
+          maxHeight: pulseMeasured.current
+            ? pulseHeight.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, pulseMeasured.current],
+              })
+            : undefined,
+          opacity: pulseHeight.interpolate({
+            inputRange: [0, 0.6, 1],
+            outputRange: [0, 1, 1],
+          }),
+          overflow: 'hidden',
+        }}
+        onLayout={(e) => {
+          // Only ever grows: capturing a mid-collapse height would freeze the
+          // animation at whatever it had reached.
+          const h = e.nativeEvent.layout.height;
+          if (h > pulseMeasured.current) pulseMeasured.current = h;
+        }}
+      >
       <View style={styles.card}>
         <Text style={styles.eyebrow}>DAILY PULSE</Text>
 
@@ -376,6 +533,7 @@ export default function HomeScreen() {
                 solid={step.solid}
                 value={value}
                 active={checkin?.energy === value}
+                reaction={step.reaction}
                 onPress={() => void onPickEnergy(value)}
                 // Was "Opens the check-in form — nothing is recorded until you
                 // finish it", which stopped being true when the tap started
@@ -395,6 +553,8 @@ export default function HomeScreen() {
             : 'Not checked in yet — tap a face to start'}
         </Text>
       </View>
+      </Animated.View>
+      ) : null}
 
       {/*
         Placed ABOVE the recorder and below the daily pulse.
@@ -449,12 +609,12 @@ export default function HomeScreen() {
       <Pressable
         onPress={() => router.push('/log-seizure')}
         accessibilityRole="button"
-        accessibilityLabel="Log a seizure that already happened"
+        accessibilityLabel="Add a past seizure"
         accessibilityHint="Opens a form to record a past seizure from memory"
         style={({ pressed }) => [styles.logPast, pressed && styles.pressed]}
       >
         <Icon name="edit" size="md" color={colors.inkSoft} />
-        <Text style={styles.logPastLabel}>Log one that already happened</Text>
+        <Text style={styles.logPastLabel}>Add a past seizure</Text>
         <Icon name="chevron" size="md" color={colors.inkSoft} />
       </Pressable>
 
@@ -594,17 +754,45 @@ export default function HomeScreen() {
                 pressed && styles.pressed,
               ]}
             >
+              {/* The clip, when this seizure has one. A vet asks "did you get
+                  it on video" before anything else, so the answer belongs on
+                  the row rather than one tap further in. */}
+              {clipBySeizure.has(s.id) ? (
+                // A plain Image rather than <VideoTile>: the tile carries a
+                // duration pill and a "date entered by you" badge sized for a
+                // 150pt card, and at 44pt those overlap into an unreadable
+                // smudge. The row needs one thing said — there is footage —
+                // and the play glyph says it.
+                <View style={styles.recentThumbWrap} accessible={false}>
+                  <Image
+                    source={{
+                      uri: thumbnailUri(clipBySeizure.get(s.id)!.video.thumbUri),
+                    }}
+                    style={styles.recentThumb}
+                    resizeMode="cover"
+                  />
+                  <View style={styles.recentPlayBadge} pointerEvents="none">
+                    {/* Same scrim disc as the big cards. A bare white triangle
+                        disappears against a pale poster frame. */}
+                    <View style={styles.recentPlayDisc}>
+                      <Icon name="play" size="sm" color={colors.onMedia} filled />
+                    </View>
+                  </View>
+                </View>
+              ) : null}
               <View style={styles.flexOne}>
                 <Body style={styles.semibold}>
-                  {new Date(s.start).toLocaleDateString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                  {', '}
-                  {new Date(s.start).toLocaleTimeString(undefined, {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
+                  {[
+                    new Date(s.start).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                    }),
+                    // Omitted entirely when the owner never gave a time — the
+                    // stored midnight is a sentinel, not an observation.
+                    timeOfDay(s.start, hasKnownTime(s.timingConfidence)),
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}
                 </Body>
                 <Muted numberOfLines={1} style={styles.recentObs}>
                   {s.ictalObs.slice(0, 3).join(', ') || 'No observations logged'}
@@ -823,13 +1011,12 @@ function VideoCard({ entry, onPress }: { entry: GalleryEntry; onPress: () => voi
     day: 'numeric',
     month: 'short',
   });
-  const time = when.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`Seizure video from ${day} at ${time}`}
+      accessibilityLabel={`Seizure video from ${day}`}
       style={({ pressed }) => [styles.videoCard, pressed && styles.pressed]}
     >
       <View>
@@ -847,11 +1034,13 @@ function VideoCard({ entry, onPress }: { entry: GalleryEntry; onPress: () => voi
           </View>
         </View>
       </View>
+      {/* Day only. A clock time is printed here for a value most of these
+          records do not actually have — an imported clip carries no filming
+          time, so the strip filled up with a row of identical "00:00" that
+          read as a measurement rather than as the absence of one. The detail
+          screen still shows a time when there is a real one. */}
       <Text style={styles.videoTitle} numberOfLines={1}>
         {day}
-      </Text>
-      <Text style={styles.videoSub} numberOfLines={1}>
-        {time}
       </Text>
     </Pressable>
   );
@@ -873,6 +1062,37 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
   },
   recentRowLast: { borderBottomWidth: 0, paddingBottom: 0 },
+  // Fixed square so rows with and without a clip keep the same rhythm; the
+  // text column flexes around it.
+  // A rounded SQUARE, not a pill: radius.control is 100 and would turn a 44pt
+  // box into a circle, which reads as an avatar of the dog rather than as a
+  // still from a clip.
+  recentThumbWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: colors.line,
+  },
+  recentThumb: { width: '100%', height: '100%' },
+  recentPlayBadge: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recentPlayDisc: {
+    width: 22,
+    height: 22,
+    borderRadius: 11, // a circle: half of 22, so not a radius token
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.onMediaScrim,
+    paddingLeft: 1, // the triangle's visual centre sits left of its box
+  },
   flexOne: { flex: 1 },
   recentObs: { marginTop: 1 },
   screen: { flex: 1, backgroundColor: colors.bg },
@@ -1171,12 +1391,5 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginTop: spacing.sm,
     fontFamily: fontFamily.extrabold
-  },
-  videoSub: {
-    fontSize: fontSize.sm,
-    color: colors.inkSoft,
-    marginTop: 1,
-    fontVariant: ['tabular-nums'],
-    fontFamily: fontFamily.regular
   },
 });

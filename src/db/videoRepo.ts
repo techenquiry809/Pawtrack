@@ -47,6 +47,7 @@ import { getDeviceId } from './syncState';
 import type {
   CaptureConfidence,
   GalleryEntry,
+  TimingConfidence,
   Video,
   VideoSource,
 } from '@/types/domain';
@@ -149,6 +150,7 @@ type GalleryRow = VideoRow & {
   seizure_start: number;
   seizure_duration_sec: number;
   seizure_duration_confidence: string;
+  seizure_timing_confidence: string;
   seizure_ictal_obs: string;
   seizure_post_behavior: string;
   seizure_retrospective: number;
@@ -187,6 +189,7 @@ export async function listGallery(dogId: string): Promise<GalleryEntry[]> {
        s.start               AS seizure_start,
        s.duration_sec        AS seizure_duration_sec,
        s.duration_confidence AS seizure_duration_confidence,
+       s.timing_confidence   AS seizure_timing_confidence,
        s.ictal_obs           AS seizure_ictal_obs,
        s.post_behavior       AS seizure_post_behavior,
        s.retrospective       AS seizure_retrospective
@@ -203,37 +206,17 @@ export async function listGallery(dogId: string): Promise<GalleryEntry[]> {
     seizureDurationSec: row.seizure_duration_sec,
     seizureDurationConfidence:
       row.seizure_duration_confidence as DurationConfidence,
+    // A clip's own timestamp IS its seizure's `start`, copied at attach time,
+    // so the seizure's timing confidence is what says whether that instant
+    // carries a real clock time. `captureConfidence` cannot answer it: it is
+    // 'owner_stated' on every imported clip and speaks about the DATE.
+    seizureTimingConfidence:
+      row.seizure_timing_confidence as TimingConfidence,
     observationCount:
       countJsonArray(row.seizure_ictal_obs) +
       countJsonArray(row.seizure_post_behavior),
     retrospective: row.seizure_retrospective === 1,
   }));
-}
-
-/** How many videos this dog has, for the Records tab's Gallery segment badge. */
-export async function countGallery(dogId: string): Promise<number> {
-  const db = await getDb();
-  const owner = ownerScope('v');
-  const row = await db.getFirstAsync<{ n: number }>(
-    `SELECT COUNT(*) AS n
-       FROM videos_live v JOIN seizures_live s ON s.id = v.seizure_id
-      WHERE s.dog_id = ? AND s.status = 'complete' AND ${owner.sql}`,
-    [dogId, ...owner.params],
-  );
-  return row?.n ?? 0;
-}
-
-/** Video ids on this dog whose bytes are NOT on this phone. */
-export async function listRemoteOnly(dogId: string): Promise<Video[]> {
-  const db = await getDb();
-  const owner = ownerScope('v');
-  const rows = await db.getAllAsync<VideoRow>(
-    `SELECT ${COLUMNS} ${FROM_VIDEOS}
-      WHERE v.dog_id = ? AND f.video_id IS NULL AND ${owner.sql}
-      ORDER BY v.timestamp DESC`,
-    [dogId, ...owner.params],
-  );
-  return rows.map(rowToVideo);
 }
 
 /* ------------------------------------------------------------------ */
@@ -424,24 +407,4 @@ export async function updateVideo(
       );
     }
   });
-}
-
-/**
- * Thumbnail extraction is best-effort and happens off the critical path, so it
- * gets its own tiny write rather than forcing callers through updateVideo.
- *
- * Writes ONLY to video_files and queues nothing: a poster frame is a local
- * artefact of this device's copy, and another phone will extract its own from
- * its own bytes. Pushing it would be pushing a path.
- */
-export async function setThumbnail(
-  videoId: string,
-  thumbUri: string,
-): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `INSERT INTO video_files (video_id, file_uri, thumb_uri) VALUES (?, '', ?)
-     ON CONFLICT(video_id) DO UPDATE SET thumb_uri = excluded.thumb_uri`,
-    [videoId, thumbUri],
-  );
 }

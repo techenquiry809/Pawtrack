@@ -47,10 +47,6 @@ export function setActiveUserId(userId: string | null): void {
   activeUserId = userId;
 }
 
-export function getActiveUserId(): string | null {
-  return activeUserId;
-}
-
 export type Scope = { sql: string; params: string[] };
 
 /**

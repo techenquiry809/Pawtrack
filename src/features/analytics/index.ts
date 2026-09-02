@@ -25,7 +25,6 @@ import { startOfDay, DAY_MS } from '@/utils/time';
 import { confidenceFor, type Confidence } from './confidence';
 export * from './confidence';
 import {
-  activeCluster,
   dayOfWeekBands,
   detectClusters,
   intervalTrend,
@@ -45,10 +44,6 @@ export * from './clusters';
  * is actively misleading, because one more seizure would redraw it entirely.
  */
 export const MIN_SEIZURES_FOR_PATTERNS = 3;
-
-/* ------------------------------------------------------------------ */
-/* Confidence                                                          */
-/* ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ */
 /* Time of day                                                         */

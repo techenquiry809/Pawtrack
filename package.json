@@ -1,5 +1,5 @@
 {
-  "name": "paws-journal-rn",
+  "name": "pawtrack-rn",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
@@ -58,7 +58,8 @@
     "test": "node --test 'src/**/*.test.ts'",
     "doctor": "npx expo-doctor",
     "test:db": "./supabase/tests/run_local.sh",
-    "verify:supabase": "node scripts/verify-supabase.mjs"
+    "verify:supabase": "node scripts/verify-supabase.mjs",
+    "build:icons": "node scripts/build-icons.mjs"
   },
   "private": true
 }

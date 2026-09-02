@@ -24,6 +24,13 @@ export type TimelineEvent = {
   seizureId?: string;
   durationSec?: number;
   durationConfidence?: Seizure['durationConfidence'];
+  /**
+   * Present on seizures only. 'unknown' means the owner never gave a clock
+   * time, so `timestamp` is the start of that day rather than an observation —
+   * rows must not print it. Absent on doses and check-ins, whose timestamps
+   * are always real.
+   */
+  timingConfidence?: Seizure['timingConfidence'];
   retrospective?: boolean;
   /** Present on doses only. */
   doseStatus?: MedicationDose['status'];
@@ -73,6 +80,7 @@ export function buildEvents(input: {
         seizureId: s.id,
         durationSec: s.durationSec,
         durationConfidence: s.durationConfidence,
+        timingConfidence: s.timingConfidence,
         retrospective: s.retrospective,
       });
     }
