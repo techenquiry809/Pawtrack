@@ -157,17 +157,23 @@ export async function lowestCursor(owner: string): Promise<number> {
   return row?.n ?? 0;
 }
 
-/**
- * Wipe every cursor on the device, forcing the next pull to start over.
+/*
+ * There is deliberately NO device-wide `resetCursors()`.
  *
- * Deliberately NOT account-scoped: the two callers are the tombstone-horizon
- * resync and "remove this account's data from this phone", and both are about
- * the device's local store as a whole.
+ * One existed, justified as "the two callers are the tombstone-horizon resync
+ * and 'remove this account's data from this phone', and both are about the
+ * device's local store as a whole". Neither is. Both act on ONE account —
+ * the resync deletes that account's rows, the removal deletes that account's
+ * rows — and both then threw away every cursor on the device, including those
+ * of an account that was not involved and whose rows were untouched.
+ *
+ * The effect on the bystander is a silent full re-read of their entire
+ * history on their next pull. Not corruption, but a lot of work to recover
+ * from something that never happened to them, and on a metered connection it
+ * is their data allowance paying for it.
+ *
+ * Anything that genuinely needs every cursor gone can call this per account.
  */
-export async function resetCursors(): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('DELETE FROM sync_cursors');
-}
 
 /** Forget one account's position, so its next pull re-reads from the start. */
 export async function resetCursorsForUser(owner: string): Promise<void> {

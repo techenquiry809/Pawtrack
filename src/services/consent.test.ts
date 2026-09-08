@@ -96,3 +96,56 @@ test('the version pair is unambiguous under the chosen separator', () => {
   assert.ok(!PRIVACY_VERSION.includes('|'), 'privacy version must not contain the separator');
   assert.equal(CURRENT.split('|').length, 2);
 });
+
+/* ------------------------------------------------------------------ */
+/* Clearing the pending flag                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Byte-for-byte the decision in `flushPendingConsent`.
+ *
+ * ── THE BUG THIS ENCODES ──────────────────────────────────────────────
+ *
+ * PostgREST reports an UPDATE that matched ZERO rows as a success: no error,
+ * nothing to inspect. The flush cleared the pending flag whenever `error` was
+ * null, so on the one run where the profile row did not exist yet — the case
+ * its own comment said it handled — the acceptance was dropped and nothing
+ * ever retried it, because the flag that would have triggered the retry was
+ * what had just been cleared.
+ *
+ * An acceptance is the record that someone agreed to the terms their dog's
+ * medical history is held under. "We think they agreed but have nothing that
+ * says so" is the one outcome this must not produce quietly.
+ */
+type FlushResult = {
+  data: { user_id: string }[] | null;
+  error: { message: string } | null;
+};
+
+const shouldClearPending = (r: FlushResult): boolean =>
+  !r.error && !!r.data && r.data.length > 0;
+
+test('a row actually written clears the pending flag', () => {
+  assert.equal(shouldClearPending({ data: [{ user_id: 'u1' }], error: null }), true);
+});
+
+test('an update that matched nothing stays pending', () => {
+  // The regression: no error, no rows. The profile has not been written yet.
+  assert.equal(shouldClearPending({ data: [], error: null }), false);
+});
+
+test('a failed update stays pending', () => {
+  assert.equal(
+    shouldClearPending({ data: null, error: { message: 'network' } }),
+    false,
+  );
+});
+
+test('success is never inferred from the absence of an error alone', () => {
+  // The shape of the old code, spelled out: `!error` on its own said yes to
+  // the empty-result case above.
+  const empty: FlushResult = { data: [], error: null };
+  assert.equal(!empty.error, true, 'the old condition would have cleared this');
+  assert.equal(shouldClearPending(empty), false, 'the new one must not');
+});
+

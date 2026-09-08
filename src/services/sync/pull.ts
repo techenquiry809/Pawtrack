@@ -31,7 +31,7 @@ import {
   getCursor,
   setCursor,
   lowestCursor,
-  resetCursors,
+  resetCursorsForUser,
 } from '@/db/syncState';
 import { getSupabase } from '@/services/supabase';
 
@@ -74,7 +74,27 @@ async function needsFullResync(owner: string): Promise<boolean> {
 }
 
 /**
- * Wipe the synced tables and start from sequence zero.
+ * Wipe ONE ACCOUNT'S synced rows and start that account from sequence zero.
+ *
+ * ── WHY THE OWNER FILTER IS NOT OPTIONAL ──────────────────────────────
+ *
+ * One phone can hold rows for more than one account (see db/scope.ts, which
+ * is the whole reason every read is fenced). This used to delete by the
+ * outbox guard alone — every row in every synced table, whoever it belonged
+ * to — and then call the device-wide `resetCursors()`.
+ *
+ * The account being resynced re-downloads what it lost, so on that side the
+ * damage repairs itself. The OTHER account's rows are not re-downloaded by
+ * anything: nothing is signed in as them, their cursor is gone too, and the
+ * next time they sign in their pull starts from zero and re-fetches from the
+ * server — which sounds like a recovery and is not one for the rows the
+ * server never had. Anything of theirs still queued in the outbox survived
+ * on a `row_id` match, but a row of theirs that had already been pushed and
+ * then edited offline was simply gone.
+ *
+ * It is scoped to `owner` now, and NULL-owner rows are left alone: those are
+ * the pre-accounts rows that `adoptOrphanedLocalData` claims, and they exist
+ * nowhere but this phone.
  *
  * `video_files` is deliberately untouched. It holds the location of bytes on
  * THIS phone, which no server round trip can restore — clearing it would turn
@@ -83,7 +103,7 @@ async function needsFullResync(owner: string): Promise<boolean> {
  * The outbox is untouched too. Anything queued here has not reached the server
  * and must survive to be pushed after the resync.
  */
-async function fullResync(): Promise<void> {
+async function fullResync(owner: string): Promise<void> {
   console.warn('[sync] cursor is behind the tombstone horizon; full resync');
   const db = await getDb();
 
@@ -94,13 +114,14 @@ async function fullResync(): Promise<void> {
       // them here would lose them for good.
       await db.runAsync(
         `DELETE FROM ${q(spec.table)}
-          WHERE id NOT IN (SELECT row_id FROM outbox WHERE table_name = ?)`,
-        [spec.table],
+          WHERE user_id = ?
+            AND id NOT IN (SELECT row_id FROM outbox WHERE table_name = ?)`,
+        [owner, spec.table],
       );
     }
   });
 
-  await resetCursors();
+  await resetCursorsForUser(owner);
 }
 
 /**
@@ -265,7 +286,7 @@ export async function pullAll(): Promise<PullResult> {
 
   let didFullResync = false;
   if (await needsFullResync(owner)) {
-    await fullResync();
+    await fullResync(owner);
     didFullResync = true;
   }
 

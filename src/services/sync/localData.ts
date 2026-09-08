@@ -21,7 +21,7 @@
 
 import { getDb } from '@/db/client';
 import { SYNC_TABLES, q } from '@/db/syncSchema';
-import { resetCursors } from '@/db/syncState';
+import { resetCursorsForUser } from '@/db/syncState';
 import { deleteVideoFile } from '@/services/videoService';
 import { getSupabase } from '@/services/supabase';
 
@@ -87,8 +87,12 @@ export async function removeAccountDataFromDevice(
     if (file.thumb_uri) deleteVideoFile(file.thumb_uri);
   }
 
-  // The next sign-in on this device starts from the beginning of history.
-  await resetCursors();
+  // This account's next sign-in on this device starts from the beginning of
+  // its history. Scoped to `userId` for the same reason the deletes above are:
+  // another account's rows were never touched, so its cursor must not be
+  // either — wiping it would make that account re-read its entire history on
+  // its next pull to recover from something that never happened to it.
+  await resetCursorsForUser(userId);
 
   return { deletedRows, deletedFiles };
 }

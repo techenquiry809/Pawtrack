@@ -76,6 +76,43 @@ export const GOOGLE_IOS_CLIENT_ID = extra.googleIosClientId ?? '';
 export const isSyncConfigured = (): boolean =>
   SUPABASE_URL.length > 0 && SUPABASE_ANON_KEY.length > 0;
 
+/**
+ * Whether the Google button can actually do anything if it is tapped.
+ *
+ * ── WHY THIS IS NOT `isSyncConfigured()` ──────────────────────────────
+ *
+ * That answers "are accounts available at all", which is true of a build with
+ * Supabase configured and no Google OAuth client. The sign-in screen used it
+ * for both, so a build without Google credentials still drew the button, and
+ * tapping it got as far as `GoogleSignin.configure({ webClientId: '' })`
+ * before failing — a dead control that looks live, on the screen where an
+ * owner is least able to tell a misconfiguration from their own mistake.
+ *
+ * ── WHY THE TWO IDS ARE NOT CHECKED THE SAME WAY ──────────────────────
+ *
+ * They are not both required everywhere. `webClientId` is what Supabase
+ * validates the id token's audience against, so it is needed on EVERY
+ * platform including Android, which has no web build. `iosClientId` is passed
+ * as `GOOGLE_IOS_CLIENT_ID || undefined` and is only meaningful on iOS.
+ *
+ * Requiring both on both platforms would hide a working button on a
+ * correctly-configured Android build — which is precisely the build that
+ * ships to Play. Hence the split.
+ *
+ * ── WHAT THIS CANNOT TELL YOU ─────────────────────────────────────────
+ *
+ * Whether the Google provider is ENABLED in the Supabase project. That lives
+ * server-side and there is no client-visible signal for it, so a build with
+ * valid client ids and the provider switched off still shows a button that
+ * fails at the token exchange. Only the dashboard fixes that one.
+ */
+export function isGoogleSignInConfigured(): boolean {
+  if (!isSyncConfigured()) return false;
+  if (GOOGLE_WEB_CLIENT_ID.length === 0) return false;
+  if (Platform.OS === 'ios' && GOOGLE_IOS_CLIENT_ID.length === 0) return false;
+  return true;
+}
+
 /* ------------------------------------------------------------------ */
 /* Session storage                                                     */
 /* ------------------------------------------------------------------ */

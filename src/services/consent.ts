@@ -161,7 +161,7 @@ export async function flushPendingConsent(
      * If no row exists yet the update simply matches nothing, the pending flag
      * stays set, and the next flush succeeds once the profile is written.
      */
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .update({
         terms_version: TERMS_VERSION,
@@ -169,12 +169,35 @@ export async function flushPendingConsent(
         consented_at: now,
         updated_at: now,
       })
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      /*
+       * `.select()` is what makes the "matches nothing" case above visible.
+       *
+       * PostgREST reports an UPDATE that matched ZERO rows as a success — no
+       * error, nothing to inspect. So the code cleared the pending flag on
+       * exactly the run the comment says it should not: profile row not
+       * written yet, update matches nothing, flag cleared, and the acceptance
+       * never reaches the account. Nothing retries it, because the only thing
+       * that would have is the flag that was just dropped.
+       *
+       * Asking for the affected rows back turns that silence into an empty
+       * array, which is checkable. Allowed by the "own profile" policy, which
+       * grants select on the same row this update is fenced to.
+       */
+      .select('user_id');
 
     if (error) {
       console.warn('[consent] could not record agreement on the account', error.message);
       return;
     }
+
+    if (!data || data.length === 0) {
+      // The profile row is not there yet — reconcileProfile() writes it on
+      // sign-in. Leave the flag up so the next flush carries the acceptance.
+      console.warn('[consent] no profile row to record agreement on yet; still pending');
+      return;
+    }
+
     await setSyncValue(pendingKey(userId), '');
   } catch (e) {
     // Left pending on purpose. The next sync tries again.

@@ -66,6 +66,7 @@ import { PawTrail } from '@/components/PawTrail';
 import { colors, fontFamily, fontSize, radius, shadow, spacing } from '@/theme/tokens';
 import { duration, useReducedMotion } from '@/theme/motion';
 import { accountsAvailable, useAuthStore, secondsUntil } from '@/store/authStore';
+import { isGoogleSignInConfigured } from '@/services/supabase';
 import { clearStrandedRowCount, strandedRowCount } from '@/services/sync/devices';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -91,6 +92,11 @@ export default function SignInScreen() {
   const error = useAuthStore((s) => s.error);
   const awaitingConfirmation = useAuthStore((s) => s.awaitingConfirmation);
   const signInWithGoogle = useAuthStore((s) => s.signInWithGoogle);
+  /*
+   * Read once per render from build config, not state: these are compile-time
+   * values from app.config.ts extra and cannot change while the app is open.
+   */
+  const googleAvailable = isGoogleSignInConfigured();
   const signInWithPassword = useAuthStore((s) => s.signInWithPassword);
   const setError = useAuthStore((s) => s.setError);
   const signInBlockedUntil = useAuthStore((s) => s.signInBlockedUntil);
@@ -375,29 +381,43 @@ export default function SignInScreen() {
                 />
               )}
 
-              {/* ---- Providers --------------------------------------- */}
-              <View style={styles.divider}>
-                <View style={styles.rule} />
-                <Muted style={styles.dividerLabel}>or continue with</Muted>
-                <View style={styles.rule} />
-              </View>
+              {/* ---- Providers ---------------------------------------
+                  The divider goes with the buttons, not above the space they
+                  would have occupied. Google is currently the only provider
+                  here, so a build without Google credentials has nothing to
+                  introduce — and "or continue with" over an empty gap reads
+                  as something that failed to load.
 
-              <View style={styles.providers}>
-                {/*
-                  Temporarily removed — coming back before submission.
-                  App Store guideline 4.8 requires Apple sign-in wherever
-                  Google is offered, so this MUST return before this build
-                  goes to the App Store; its absence is fine for now only
-                  because nothing is being submitted yet.
-                */}
-                <ProviderButton
-                  label="Google"
-                  glyph="G"
-                  tone="light"
-                  disabled={busy}
-                  onPress={() => void attempt(signInWithGoogle)}
-                />
-              </View>
+                  Hidden rather than disabled, deliberately. A greyed-out
+                  Google button invites the owner to work out what THEY did
+                  wrong; its absence simply means this build signs in with a
+                  password. See isGoogleSignInConfigured(). */}
+              {googleAvailable && (
+                <>
+                  <View style={styles.divider}>
+                    <View style={styles.rule} />
+                    <Muted style={styles.dividerLabel}>or continue with</Muted>
+                    <View style={styles.rule} />
+                  </View>
+
+                  <View style={styles.providers}>
+                    {/*
+                      Temporarily removed — coming back before submission.
+                      App Store guideline 4.8 requires Apple sign-in wherever
+                      Google is offered, so this MUST return before this build
+                      goes to the App Store; its absence is fine for now only
+                      because nothing is being submitted yet.
+                    */}
+                    <ProviderButton
+                      label="Google"
+                      glyph="G"
+                      tone="light"
+                      disabled={busy}
+                      onPress={() => void attempt(signInWithGoogle)}
+                    />
+                  </View>
+                </>
+              )}
 
               {/* ---- Sign up ----------------------------------------- */}
               <View style={styles.signupRow}>

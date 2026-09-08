@@ -1,32 +1,6 @@
 import type { ExpoConfig } from 'expo/config';
 
-/**
- * Expo app configuration.
- *
- * This is a .ts file (not app.json) so we can read environment variables and
- * switch values per build profile. Anything secret belongs in .env / EAS
- * secrets, never in this file — it is committed to git.
- */
-
-/**
- * IMPORTANT: these identifiers are permanent once you publish to the stores.
- * Change them BEFORE your first submission, never after.
- *
- * ── com.pawtrack.app IS NOT AVAILABLE ON APPLE'S SIDE ─────────────────
- *
- * Registering it fails: "The app identifier com.pawtrack.app cannot be
- * registered to your development team because it is not available." Bundle
- * identifiers are globally unique across every Apple developer account, and
- * this one is already claimed by someone else — so this project can never
- * ship under it, whatever happens locally.
- *
- * That decision is not made here. `IOS_BUNDLE_ID` overrides it for a device
- * build so testing is not blocked on choosing the permanent name, and the
- * default is left exactly as it was. Android is untouched: its package name
- * has no such registry and `com.pawtrack.app` is free to keep there, though
- * matching the two is worth doing when the real identifier is picked.
- */
-const BUNDLE_ID = 'com.pawtrack.app';
+const BUNDLE_ID = 'com.pawtrack.ausasi';
 const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID ?? BUNDLE_ID;
 
 const config: ExpoConfig = {
@@ -42,44 +16,13 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: IOS_BUNDLE_ID,
-    /**
-     * The Apple team the app AND its extensions are signed by.
-     *
-     * Needed because the app is no longer a single target: the Record Seizure
-     * widget (targets/seizure/) is a second bundle id, and Xcode will not pick
-     * a signing team for an extension on its own. Without this, a local
-     * `expo run:ios` fails at the widget target with "Signing for
-     * 'SeizureWidget' requires a development team" — the app itself builds
-     * fine, which makes it a confusing failure.
-     *
-     * From the environment because it is account-specific: a fork or a
-     * contributor builds under their own team, and hardcoding mine would make
-     * this file something every one of them has to edit and remember not to
-     * commit. EAS supplies its own credentials and does not need it.
-     */
+    // Required for the Record Seizure widget target: Xcode will not pick a
+    // signing team for an extension on its own, and without this a local
+    // `expo run:ios` fails with "Signing for 'SeizureWidget' requires a
+    // development team". From the environment because it is account-specific;
+    // EAS supplies its own credentials and does not read it.
     appleTeamId: process.env.APPLE_TEAM_ID,
-    // Sign in with Apple. NOT optional: App Store guideline 4.8 requires an
-    // equivalent privacy-preserving option wherever a third-party social login
-    // is offered, and this app offers Google. Shipping Google without this is
-    // a guaranteed rejection.
-    /*
-      Disabled only when APPLE_PERSONAL_TEAM=1 — a free Apple team cannot
-      provision this capability, and leaving it on makes an on-device build
-      fail at signing with a message that names a missing profile rather than
-      the capability behind it. Default stays `true`: guideline 4.8 requires
-      it wherever Google sign-in is offered, and the flag is local-only so it
-      cannot follow a build to EAS. See plugins/withPersonalTeamEntitlements.
-    */
     usesAppleSignIn: process.env.APPLE_PERSONAL_TEAM !== '1',
-    // iOS shows these strings in the permission dialog. Apple REJECTS apps
-    // whose strings are vague, so each one names the concrete user benefit.
-    //
-    // KEEP ALL THREE. They look like they belong to expo-camera, which has no
-    // importers — but they are required by expo-image-picker, which IS used:
-    // src/services/videoService.ts calls launchCameraAsync() to record a
-    // seizure. iOS hard-crashes an app that touches the camera without a usage
-    // string, so deleting these alongside the expo-camera plugin entry would
-    // crash the one feature owners use mid-emergency.
     infoPlist: {
       NSCameraUsageDescription:
         "PawTrack uses the camera so you can record video of your dog's seizure to show your veterinarian.",
@@ -87,11 +30,9 @@ const config: ExpoConfig = {
         "PawTrack records audio with seizure videos, because vocalisation can be clinically relevant.",
       NSPhotoLibraryUsageDescription:
         'PawTrack lets you attach a video you already recorded to a seizure record.',
-      // ADD-ONLY, and deliberately separate from the string above. Saving a
-      // seizure video back to Photos does not require the ability to read the
-      // owner's library, and iOS shows a materially gentler prompt for
-      // add-only access — so the narrower ask also gets granted more often.
-      // expo-media-library is requested with writeOnly: true to match.
+      // ADD-ONLY, and deliberately separate from the read permission above:
+      // iOS shows a gentler prompt for add-only access, and expo-media-library
+      // is requested with writeOnly: true to match.
       NSPhotoLibraryAddUsageDescription:
         'PawTrack saves seizure videos to your photo library so you can keep them or send them to your veterinarian.',
       // expo-local-authentication, for the OPT-IN app lock in Settings.
