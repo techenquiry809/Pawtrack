@@ -42,3 +42,7 @@ yarn-error.*
 
 # Local environment
 .env
+
+# Local scratch archive — a source tarball that was committed by accident.
+# Untracked in the commit that added this line; the blob stays in history.
+.pawtrack_src_tmp.tgz
