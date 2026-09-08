@@ -116,7 +116,7 @@ fi
 echo "   ✓ no security definer function is reachable by anon"
 
 echo "→ tests"
-for t in rls_smoke_test sync_push_test; do
+for t in rls_smoke_test sync_push_test devices_test; do
   psql_run -f "$ROOT/supabase/tests/$t.sql" 2>&1 | grep -E 'PASS|FAIL|ERROR' || {
     echo "   $t produced no verdict" >&2
     exit 1

@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  clipLocation,
   esc,
   fmtDuration,
   renderReportHtml,
@@ -541,4 +542,125 @@ test('a real diagnosis is still printed — it is what a referral vet reads firs
     assert.ok(html.includes('Diagnosis'), `${status} lost its row`);
     assert.ok(html.includes(status), `${status} was not printed`);
   }
+});
+
+/* ------------------------------------------------------------------ */
+/* Video clips                                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ── WHY THESE EXIST ───────────────────────────────────────────────────
+ *
+ * The report used to embed each clip's poster frame as `<img src="file://…">`.
+ * In a PDF that is a broken-image glyph whenever the path does not resolve,
+ * and an empty grey square whenever there is no thumbnail at all — which is
+ * ALWAYS the case for a clip whose bytes are on another phone, because the
+ * still is extracted from the file and lives with it.
+ *
+ * So: no `<img>` anywhere near a clip, and a line of text saying where the
+ * footage actually is. The `<img>` assertion is the regression guard — it is
+ * the specific thing that printed wrong on a real report.
+ */
+
+const clipSeizure = (videos: unknown[]) => ({
+  id: 's1', dogId: 'd1', start: new Date(2026, 7, 30, 9, 0).getTime(),
+  end: null, durationSec: 40, durationConfidence: 'high', retrospective: false,
+  preIctalObs: [], preIctalNote: '', ictalObs: [], awareness: null,
+  autonomic: [], position: null, postBehavior: [], severityOwner: null,
+  recoverySec: null, notes: '', videos,
+});
+
+const clip = (over: Record<string, unknown> = {}) => ({
+  id: 'v1', seizureId: 's1', dogId: 'd1', source: 'recorded', fileUri: 'x.mp4',
+  isLocal: true, originDeviceId: null, timestamp: 0, importedAt: 0,
+  captureConfidence: 'device', thumbUri: '', durationSec: 12, note: '',
+  preNote: '', ictalNote: '', postNote: '', ...over,
+});
+
+const withClips = (videos: unknown[]) => ({
+  ...emptySummary(),
+  seizureCount: 1,
+  isEmpty: false,
+  videoCount: videos.length,
+  seizures: [clipSeizure(videos)],
+});
+
+const render = (summary: unknown, deviceNames?: Record<string, string>) =>
+  renderReportHtml({
+    summary: summary as never,
+    dog: bareDog as never,
+    dogName: 'Lucy',
+    breedLabel: 'Labrador Retriever',
+    rangeLabel: 'Sunday 30 Aug 2026',
+    ...(deviceNames ? { deviceNames } : {}),
+  });
+
+test('a clip prints an icon, never an image tag', () => {
+  const html = render(withClips([clip({ thumbUri: 'file:///data/thumb.jpg' })]));
+  // The regression: a file:// still that the PDF renderer cannot resolve.
+  assert.ok(!html.includes('<img'), 'the report still embeds an image');
+  assert.ok(!html.includes('file:///data/thumb.jpg'), 'a local file path leaked into the PDF');
+  assert.ok(!html.includes('noshot'), 'the empty-square fallback is still being rendered');
+  assert.ok(html.includes('class="vicon"'), 'no video icon was drawn');
+});
+
+test('a clip says where its footage is', () => {
+  const html = render(withClips([clip()]));
+  assert.ok(html.includes('Video 1 of 1'));
+  assert.ok(html.includes('saved in the app on this phone'));
+  // Matched loosely: the sentence wraps across lines in the template, and a
+  // test that pinned the exact whitespace would break on a reflow.
+  assert.match(
+    html,
+    /recordings themselves are not part of this\s+document/,
+    'the report should say the files are not attached',
+  );
+});
+
+test('filmed in the app, imported, and remote each read differently', () => {
+  assert.match(
+    clipLocation({ isLocal: true, source: 'recorded', originDeviceId: null }),
+    /Filmed in the PawTrack app/,
+  );
+  assert.match(
+    clipLocation({ isLocal: true, source: 'uploaded', originDeviceId: null }),
+    /photo library/,
+  );
+  // The one that matters: the row synced but the bytes never leave the phone
+  // that filmed them, so a second device has a record and no file.
+  assert.match(
+    clipLocation({ isLocal: false, source: 'recorded', originDeviceId: 'dev-2' }),
+    /Not on this phone/,
+  );
+});
+
+test('a remote clip names the phone that holds it when the registry knows it', () => {
+  const remote = clip({ isLocal: false, originDeviceId: 'dev-2' });
+  const html = render(withClips([remote]), { 'dev-2': "Sam's iPhone" });
+  assert.ok(html.includes('Sam&#39;s iPhone'), 'the device name should be printed, escaped');
+  assert.ok(!html.includes("Sam's iPhone"), 'the apostrophe must be escaped');
+});
+
+test('an unknown device degrades to the same wording the gallery uses', () => {
+  const remote = clip({ isLocal: false, originDeviceId: 'never-seen' });
+  // No map passed at all: a phone that has never synced the registry.
+  assert.ok(render(withClips([remote])).includes('another device'));
+  // Present but missing this id — the same outcome, not a crash or a raw UUID.
+  assert.ok(render(withClips([remote]), { other: 'x' }).includes('another device'));
+  assert.ok(!render(withClips([remote])).includes('never-seen'), 'a raw device id leaked');
+});
+
+test('a clip note still cannot inject markup', () => {
+  const html = render(withClips([clip({ ictalNote: '<script>alert(1)</script>' })]));
+  assert.ok(!html.includes('<script>'), 'a clip note escaped into markup');
+  assert.ok(html.includes('&lt;script&gt;'));
+});
+
+test('legacy clips are described, not left blank', () => {
+  // Filmed before the app recorded how a video got in. It is still on the
+  // phone, so saying nothing would be worse than saying the general truth.
+  assert.match(
+    clipLocation({ isLocal: true, source: 'legacy', originDeviceId: null }),
+    /saved in the app on this phone/,
+  );
 });

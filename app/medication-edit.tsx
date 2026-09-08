@@ -316,8 +316,14 @@ export default function MedicationEditScreen() {
 
         {times.length > 0 && (
           <View style={styles.timeList}>
-            {times.map((t) => (
-              <View key={t.id} style={styles.timeRow}>
+            {times.map((t, i) => (
+              // The divider separates rows, so the last one does not get it —
+              // a rule under the final row fences the list off from the
+              // "ADD A TIME" label below and reads as a missing row.
+              <View
+                key={t.id}
+                style={[styles.timeRow, i === times.length - 1 && styles.timeRowLast]}
+              >
                 {/*
                   The time itself is the edit control. A reminder set to the
                   wrong hour used to be a remove-then-add-again, which loses
@@ -376,6 +382,10 @@ export default function MedicationEditScreen() {
         <Button
           label="Pick another time"
           variant="ghost"
+          // The quick chips above end flush against this button's top edge
+          // otherwise: `quickRow` has no bottom margin and Button has no top
+          // one, so the two containers touched and read as one control block.
+          style={styles.pickAnother}
           onPress={() => {
             setPickError(null);
             setPicking('new');
@@ -492,6 +502,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
   },
+  timeRowLast: { borderBottomWidth: 0 },
   // The tappable half of the row: the time and what it does, as one target.
   timeEdit: { flex: 1, justifyContent: 'center', paddingVertical: spacing.sm, gap: 1 },
   timeValue: {
@@ -518,6 +529,14 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold
   },
   quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  /**
+   * Separates the chip grid from the button below it.
+   *
+   * `spacing.md` rather than `spacing.sm`: the chips are already `sm` apart
+   * from each other, and matching that would make the button look like a
+   * seventh chip on a new row rather than the alternative to all of them.
+   */
+  pickAnother: { marginTop: spacing.md },
   quickChip: {
     minHeight: 40,
     justifyContent: 'center',

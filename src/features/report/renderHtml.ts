@@ -138,6 +138,82 @@ export function brandMarkSvg(size = 30): string {
 </svg>`;
 }
 
+/**
+ * The clip marker: a film frame, drawn rather than photographed.
+ *
+ * ── WHAT THIS REPLACES, AND WHY ───────────────────────────────────────
+ *
+ * Each clip used to print its extracted poster frame, `<img src="file://…">`.
+ * That was wrong twice over.
+ *
+ * It often did not render at all. The still is an app-owned file and the HTML
+ * expo-print receives is a bare string with no document base, so a src that
+ * fails resolves to the WebView's broken-image glyph — a torn-page icon in the
+ * middle of a veterinary record. When the thumbnail was missing entirely (an
+ * extraction that failed, or a clip whose bytes live on another phone) the
+ * fallback was an empty grey square, which reads exactly the same way: as
+ * something that should have loaded and did not.
+ *
+ * And when it DID work it promised something the document cannot deliver. A
+ * PDF cannot play video. A poster frame invites a vet to look for controls
+ * that are not there, and one frame of a seizure is not clinically useful on
+ * its own anyway — what a reader actually needs to know is that footage exists
+ * and where to find it. That is what the caption beside this now says.
+ *
+ * Vector for the same reasons as brandMarkSvg: no file to resolve, nothing to
+ * base64, and it stays sharp on a 600dpi laser.
+ */
+export function videoIconSvg(size = 26): string {
+  return `<svg class="vicon" width="${size}" height="${size}" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Video">
+  <rect x="1" y="6" width="21" height="20" rx="3.5" fill="#2F7E86"/>
+  <path d="M25 12.6 30 9.4v13.2l-5-3.2Z" fill="#2F7E86"/>
+  <path d="M9.6 12.2 16 16l-6.4 3.8Z" fill="#ffffff"/>
+</svg>`;
+}
+
+/**
+ * Where this clip's footage actually is, in one line a vet can act on.
+ *
+ * ── THE DISTINCTION THAT MATTERS ──────────────────────────────────────
+ *
+ * Three different things can be true of a video row, and they are not
+ * interchangeable to someone trying to watch it:
+ *
+ *   filmed in the app      the only copy is inside PawTrack on that phone
+ *   imported from the roll the original is still in the phone's own library,
+ *                          and PawTrack holds a copy
+ *   not on this phone      the row synced but the bytes did not — they never
+ *                          leave the device that filmed them, by design (see
+ *                          `isLocal` in types/domain.ts)
+ *
+ * The last one is the reason this exists at all. On a second device every clip
+ * is a row with no file, and a report that said nothing would leave a reader
+ * hunting for footage on a phone that has never had it.
+ *
+ * `deviceNames` is best-effort: the registry is cached locally and may not
+ * have been read yet, so an unknown id falls back to "another device" — the
+ * same wording the gallery uses, deliberately, so the app and the document do
+ * not describe the same clip two different ways.
+ */
+export function clipLocation(
+  v: {
+    isLocal: boolean;
+    source: string;
+    originDeviceId: string | null;
+  },
+  deviceNames: Record<string, string> = {},
+): string {
+  if (!v.isLocal) {
+    const named = v.originDeviceId ? deviceNames[v.originDeviceId] : undefined;
+    return `Not on this phone — the file is on ${named ?? 'another device'}`;
+  }
+  if (v.source === 'uploaded') {
+    return 'Imported from this phone’s photo library — a copy is saved in the PawTrack app';
+  }
+  // 'recorded', and 'legacy' for anything filmed before the app tracked this.
+  return 'Filmed in the PawTrack app — saved in the app on this phone';
+}
+
 /* ------------------------------------------------------------------ */
 /* Sections                                                            */
 /* ------------------------------------------------------------------ */
@@ -149,7 +225,12 @@ export function brandMarkSvg(size = 30): string {
  * a month or an all-time report, with no clock time printed, the date is the
  * only thing that tells two entries apart.
  */
-function renderSeizure(s: SeizureWithClips, index: number, showDate: boolean): string {
+function renderSeizure(
+  s: SeizureWithClips,
+  index: number,
+  showDate: boolean,
+  deviceNames: Record<string, string>,
+): string {
   const recovery = s.recoverySec && s.recoverySec > 0
     ? `<div class="row"><span class="k">Recovery</span><span class="v">${esc(fmtDuration(s.recoverySec))}</span></div>`
     : '';
@@ -161,15 +242,19 @@ function renderSeizure(s: SeizureWithClips, index: number, showDate: boolean): s
   const clips = s.videos.length > 0
     ? `<div class="clips">${s.videos.map((v, i) => `
         <div class="clip">
-          ${v.thumbUri ? `<img src="${esc(v.thumbUri)}" alt="Still from video ${i + 1}" />` : '<div class="noshot"></div>'}
+          <div class="vwrap">${videoIconSvg()}</div>
           <div class="clipmeta">
             <strong>Video ${i + 1} of ${s.videos.length}</strong>
             <span>${esc(fmtDuration(v.durationSec))}</span>
+            <span class="loc">${esc(clipLocation(v, deviceNames))}</span>
             ${v.preNote ? `<span class="cn">Before: ${esc(v.preNote)}</span>` : ''}
             ${v.ictalNote ? `<span class="cn">During: ${esc(v.ictalNote)}</span>` : ''}
             ${v.postNote ? `<span class="cn">After: ${esc(v.postNote)}</span>` : ''}
           </div>
-        </div>`).join('')}</div>`
+        </div>`).join('')}
+        <p class="clipnote">The recordings themselves are not part of this
+          document — open PawTrack to play them.</p>
+      </div>`
     : '';
 
   return `
@@ -474,10 +559,20 @@ export type RenderInput = {
   rangeLabel: string;
   /** Shown in the footer so a reader can find the app. */
   appUrl?: string;
+  /**
+   * device_id → display name, for clips whose bytes are on another phone.
+   *
+   * Optional and defaulted to empty: the registry is a cached, best-effort
+   * read (see services/sync/devices.ts) and a report must still print without
+   * it. An unknown id degrades to "another device", which is true and is what
+   * the gallery says too.
+   */
+  deviceNames?: Record<string, string>;
 };
 
 export function renderReportHtml(input: RenderInput): string {
   const { summary, dog, dogName, breedLabel, rangeLabel } = input;
+  const deviceNames = input.deviceNames ?? {};
   const d = summary.duration;
 
   // The denominator sentence. Printed whenever ANYTHING was excluded, because
@@ -506,7 +601,9 @@ export function renderReportHtml(input: RenderInput): string {
     ? `<p class="quiet">No seizures were recorded in this period.</p>`
     // Explicit arrow, NOT `map(renderSeizure)`: map passes a third argument
     // (the array), which would arrive as `showDate` and be truthy always.
-    : summary.seizures.map((s, i) => renderSeizure(s, i, summary.days.length > 1)).join('');
+    : summary.seizures
+        .map((s, i) => renderSeizure(s, i, summary.days.length > 1, deviceNames))
+        .join('');
 
   const dayCount = summary.days.length;
   const perDay = dayCount > 0
@@ -563,8 +660,15 @@ export function renderReportHtml(input: RenderInput): string {
   .strong { font-weight: 700; }
   .clips { display: flex; flex-wrap: wrap; gap: 8pt; margin-top: 7pt; }
   .clip { display: flex; gap: 7pt; border: 1px solid #EFEADF; border-radius: 5pt; padding: 5pt; width: 100%; }
-  .clip img, .clip .noshot { width: 58pt; height: 58pt; object-fit: cover; border-radius: 4pt;
-                             background: #EFEADF; flex: none; }
+  /* The icon sits in the box the thumbnail used to occupy, so the row keeps
+     its shape — but smaller and centred, because it is a marker rather than a
+     picture and a 58pt glyph would read as a failed image again. */
+  .clip .vwrap { width: 40pt; height: 40pt; flex: none; border-radius: 4pt;
+                 background: #EAF2F2; display: flex; align-items: center;
+                 justify-content: center; }
+  .clip .vwrap svg { display: block; }
+  .loc { color: #2F7E86; }
+  .clipnote { font-size: 8.5pt; color: #5B6472; margin: 4pt 0 0; width: 100%; }
   .clipmeta { display: flex; flex-direction: column; font-size: 9pt; gap: 1pt; }
   .cn { color: #5B6472; }
   .stripcap { font-size: 8pt; text-transform: uppercase; letter-spacing: .5pt; color: #5B6472; margin: 10pt 0 0; }

@@ -41,6 +41,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Muted, Pill } from '@/components/ui';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
+import { SeizureGuidance } from '@/components/SeizureGuidance';
 import { ActionBar, SectionRule } from '@/components/form';
 import { Icon } from '@/components/Icon';
 import {
@@ -146,6 +147,29 @@ export default function LiveSeizureScreen() {
   }, [dogId, startedAt, settings.clusterWindowHrs]);
 
   const pendingVideos = draft?.pendingVideos;
+
+  /**
+   * No draft — leave, rather than rendering nothing.
+   *
+   * ── THE DEAD END THIS CLOSES ──────────────────────────────────────
+   *
+   * The guard below already refuses to draw a timer with no seizure behind
+   * it, and its comment says it gets the owner "back to safety". It did not:
+   * it returned `null` and stopped there. This stack has `gestureEnabled:
+   * false`, no header and no tab bar, so what the owner actually got was a
+   * blank page with no way off it but force-quitting the app — observed by
+   * opening `pawtrack://seizure/live` directly, which is one mistyped widget
+   * URL away from real.
+   *
+   * `post.tsx` and `recovery.tsx` have carried this effect all along. This is
+   * the third screen in the same stack, and it is the one people reach first.
+   *
+   * `replace`, not `back()`: a deep link has nothing to pop. That is the same
+   * reasoning as goBackOrHome() in src/utils/nav.ts.
+   */
+  useEffect(() => {
+    if (!draft) router.replace('/(tabs)');
+  }, [draft, router]);
 
   /* -------------------------------------------------------------- */
 
@@ -258,7 +282,8 @@ export default function LiveSeizureScreen() {
   };
 
   if (!draft || !dog || !value) {
-    // Defensive: if the store was cleared out from under us, get back to safety.
+    // Nothing to draw. The effect above is what gets the owner off this
+    // screen; this only keeps the render honest until it lands.
     return null;
   }
 
@@ -336,6 +361,14 @@ export default function LiveSeizureScreen() {
             level={level}
           />
         </View>
+
+        {/* --- What to do, right now --------------------------------
+            Directly under the timer, above the banners. It is general first
+            aid on a fixed schedule and it decides nothing; the banners below
+            remain the formal alerts, and they fire at the owner's OWN warn and
+            critical minutes rather than this table's timings. See
+            src/features/seizure/guidance.ts. */}
+        <SeizureGuidance elapsed={elapsed} />
 
         {/* --- Threshold banners ------------------------------------- */}
         {level === 'warn' && (

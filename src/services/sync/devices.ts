@@ -36,6 +36,7 @@ import { getDb } from '@/db/client';
 import * as outbox from '@/db/outbox';
 import { getDeviceId, getSyncValue, setSyncValue } from '@/db/syncState';
 import { getSupabase } from '@/services/supabase';
+import { newRowOwner } from '@/db/scope';
 
 export type UserDevice = {
   deviceId: string;
@@ -90,16 +91,37 @@ export async function touchThisDevice(): Promise<void> {
   const supabase = getSupabase();
   if (!supabase) return;
 
+  /*
+   * ── user_id IS SENT, NOT LEFT TO THE COLUMN DEFAULT ───────────────────
+   *
+   * The column defaults to auth.uid(), which covers the INSERT and does
+   * nothing at all on the ON CONFLICT path — a default is not applied to an
+   * UPDATE. Combined with the old global primary key on device_id, that is
+   * what produced this, on every sync, on any phone a second account had
+   * signed into:
+   *
+   *   new row violates row-level security policy (USING expression)
+   *   for table "user_devices"
+   *
+   * The key is now (user_id, device_id) — see
+   * supabase/migrations/20260908000100_device_registry_per_account.sql —
+   * so the conflict target has to name both, and the owner has to be in the
+   * row for the conflict to resolve against the right one.
+   */
+  const userId = newRowOwner();
+  if (!userId) return; // Signed out. Nothing to announce, and nowhere to put it.
+
   const deviceId = await getDeviceId();
   const { error } = await supabase.from('user_devices').upsert(
     {
       device_id: deviceId,
+      user_id: userId,
       display_name: thisDeviceName(),
       platform: Platform.OS,
       app_version: appVersion(),
       last_seen_at: new Date().toISOString(),
     },
-    { onConflict: 'device_id' },
+    { onConflict: 'user_id,device_id' },
   );
 
   if (error) console.warn('[sync] could not update device registry', error.message);

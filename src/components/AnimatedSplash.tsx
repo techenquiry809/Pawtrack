@@ -10,6 +10,31 @@
  * over the instant it does, filling the whole window before anything else in
  * the tree gets a frame.
  *
+ * ── IT ENDS WHEN THE APP IS READY, NOT WHEN THE CLIP IS ───────────────
+ *
+ * This used to hold the window until the video played out. Measured on a
+ * release build on a real device, that was 3625ms of intro in front of an app
+ * that finished starting at 139ms and had Home painted and settled by 507ms —
+ * about three seconds of watching a logo for no reason.
+ *
+ * So `canFinish` (startup done) is what ends it now. The clip is still the
+ * thing being shown; it is simply no longer the thing being waited for. The
+ * three timings that remain each guard a different failure:
+ *
+ *   MIN_INTRO_MS   a floor, so a fast cold start does not flash the intro for
+ *                  three frames — which reads as a glitch, not as speed
+ *   playToEnd      the clip finishing is still a perfectly good reason to go,
+ *                  and on a slow start it is what fires first
+ *   MAX_INTRO_MS   a ceiling, for a file that fails to decode or a startup
+ *                  that never reports. Never reached in normal operation.
+ *
+ * ── AND IT FADES ──────────────────────────────────────────────────────
+ *
+ * Cutting from a full-bleed video to the Home screen in one frame reads as the
+ * app restarting. The fade is short enough not to be a wait and long enough to
+ * be a handoff. Skipped under Reduce Motion, where the swap is instant — see
+ * src/theme/motion.ts on why that setting is honoured rather than negotiated.
+ *
  * ── contentFit="cover", NOT "contain" ─────────────────────────────────
  *
  * The source clip is a fixed 9:16 recording. Every phone and tablet has a
@@ -20,10 +45,11 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Animated, Easing, StyleSheet } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
 import { colors } from '@/theme/tokens';
+import { useReducedMotion } from '@/theme/motion';
 
 const SPLASH_VIDEO = require('../../assets/splash-video.mp4');
 
@@ -31,37 +57,92 @@ const SPLASH_VIDEO = require('../../assets/splash-video.mp4');
 // behind an intro forever — this is well past the clip's own ~3s length.
 const MAX_INTRO_MS = 6000;
 
-export function AnimatedSplash({ onFinish }: { onFinish: () => void }) {
+/**
+ * The floor.
+ *
+ * Startup lands at ~140ms on a warm device, and dismissing at 140ms would show
+ * two or three frames of video and then something else — which looks like a
+ * failed load rather than a fast launch. Long enough for the mark to register
+ * as deliberate, short enough that nobody waits on it.
+ */
+const MIN_INTRO_MS = 700;
+
+/** The handoff. Matches `duration.enter` in the motion tokens. */
+const FADE_MS = 320;
+
+export function AnimatedSplash({
+  canFinish,
+  onFinish,
+}: {
+  /**
+   * True once startup has settled — or failed. Both are reasons to get out of
+   * the way: an error screen behind an intro is worse than no intro at all.
+   */
+  canFinish: boolean;
+  onFinish: () => void;
+}) {
   const finishedRef = useRef(false);
+  const mountedAt = useRef(Date.now());
+  const opacity = useRef(new Animated.Value(1)).current;
+  const reducedMotion = useReducedMotion();
 
   const player = useVideoPlayer(SPLASH_VIDEO, (instance) => {
     instance.loop = false;
     instance.play();
   });
 
-  useEffect(() => {
-    const finish = () => {
-      if (finishedRef.current) return;
-      finishedRef.current = true;
-      onFinish();
-    };
+  /**
+   * Kept in a ref so the leave sequence can be started from a listener, a
+   * timer or a prop change without any of them re-subscribing the others.
+   */
+  const leave = useRef<() => void>(() => {});
+  leave.current = () => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
 
-    const playToEndSub = player.addListener('playToEnd', finish);
+    if (reducedMotion) {
+      onFinish();
+      return;
+    }
+    Animated.timing(opacity, {
+      toValue: 0,
+      duration: FADE_MS,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start(() => onFinish());
+  };
+
+  // The clip ending, a decode failure, and the ceiling. All still apply.
+  useEffect(() => {
+    const playToEndSub = player.addListener('playToEnd', () => leave.current());
     const statusSub = player.addListener('statusChange', ({ status }) => {
-      if (status === 'error') finish();
+      if (status === 'error') leave.current();
     });
-    const timeout = setTimeout(finish, MAX_INTRO_MS);
+    const timeout = setTimeout(() => leave.current(), MAX_INTRO_MS);
 
     return () => {
       playToEndSub.remove();
       statusSub.remove();
       clearTimeout(timeout);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player]);
 
+  /**
+   * The normal path: startup finished, so go — once the floor has passed.
+   *
+   * The remaining wait is computed from mount rather than slept for a fixed
+   * period, so a startup that takes 900ms leaves immediately instead of
+   * serving another 700ms on top of it.
+   */
+  useEffect(() => {
+    if (!canFinish) return;
+    const remaining = Math.max(0, MIN_INTRO_MS - (Date.now() - mountedAt.current));
+    const timer = setTimeout(() => leave.current(), remaining);
+    return () => clearTimeout(timer);
+  }, [canFinish]);
+
   return (
-    <View style={styles.container} pointerEvents="none">
+    <Animated.View style={[styles.container, { opacity }]} pointerEvents="none">
       <VideoView
         style={styles.video}
         player={player}
@@ -69,7 +150,7 @@ export function AnimatedSplash({ onFinish }: { onFinish: () => void }) {
         nativeControls={false}
         allowsPictureInPicture={false}
       />
-    </View>
+    </Animated.View>
   );
 }
 

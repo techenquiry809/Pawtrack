@@ -17,7 +17,7 @@
  * on later in system settings.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
@@ -85,12 +85,19 @@ export function MedicationSection({
     }, [load]),
   );
 
-  // `load` is rebuilt when reloadToken changes, but useFocusEffect only re-runs
-  // its callback on focus — so a token bump while already focused needs its own
-  // effect to actually fetch.
-  useEffect(() => {
-    void load();
-  }, [load]);
+  /*
+   * There is deliberately NO second `useEffect(() => void load(), [load])`.
+   *
+   * One used to sit here, justified by "useFocusEffect only re-runs its
+   * callback on focus — so a token bump while already focused needs its own
+   * effect". That is not what useFocusEffect does. Its implementation is
+   * `React.useEffect(..., [effect, navigation])` and it calls the effect
+   * immediately when `navigation.isFocused()`, so a `reloadToken` bump while
+   * focused already re-runs it: the callback identity changes, the effect
+   * re-fires, the fetch happens.
+   *
+   * With both in place the list was fetched twice on mount for no benefit.
+   */
 
   const anyReminderOn = meds.some((m) => m.reminders.some((r) => r.enabled));
 

@@ -138,6 +138,7 @@ export async function buildReport(
     breedLabel: breedDisplay(dog),
     rangeLabel: formatRangeLabel(range),
     appUrl: APP_URL,
+    deviceNames: data.deviceNames,
   });
 
   const { uri } = await Print.printToFileAsync({ html });

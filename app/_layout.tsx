@@ -46,6 +46,7 @@ import { startAuthAutoRefresh } from '@/services/supabase';
 import { startSyncTriggers, syncNow } from '@/services/sync/worker';
 import { isAppLockEnabled, promptUnlock } from '@/services/appLock';
 import { useConsentStore } from '@/store/consentStore';
+import { launchIntent } from '@/services/launchIntent';
 
 /**
  * Every path in the (auth) group.
@@ -67,6 +68,22 @@ const AUTH_PATHS = [
 
 const inAuthFlow = (pathname: string): boolean =>
   AUTH_PATHS.some((path) => pathname.startsWith(path));
+
+/**
+ * What the window is covered by while the app boots.
+ *
+ *   'deciding'  we do not yet know what opened us. A plain background, the
+ *               same colour as the native launch screen, so the gap is
+ *               invisible rather than a flash of half-loaded UI.
+ *   'playing'   an ordinary launch: the branded intro.
+ *   'done'      nothing on top — either the clip finished, or this was an
+ *               emergency launch and there was never a clip.
+ *
+ * The middle state is the whole reason this is three values and not a boolean.
+ * Mounting the video first and tearing it down on learning the launch was an
+ * emergency would still have decoded and shown a frame or two of it.
+ */
+type IntroPhase = 'deciding' | 'playing' | 'done';
 
 export default function RootLayout() {
   /*
@@ -119,7 +136,7 @@ export default function RootLayout() {
   // hydration) runs in the background under it, so the two don't add up —
   // the app is simply ready to show whichever screen is correct the moment
   // the clip ends.
-  const [introDone, setIntroDone] = useState(false);
+  const [introPhase, setIntroPhase] = useState<IntroPhase>('deciding');
   /**
    * Whether the first sync after signing in has finished — succeeded, failed
    * or found nothing.
@@ -129,11 +146,34 @@ export default function RootLayout() {
    * millisecond after sign-in, which on a NEW device is nothing at all: the
    * owner was sent to onboarding and asked to create a dog the account
    * already has. Reset per account, alongside `routedFor`.
+   *
+   * Lives in the app store rather than here because app/(tabs)/_layout.tsx has
+   * to make the same distinction and could not see it from local state — see
+   * `initialSyncSettled` there for what that cost.
    */
-  const [firstSyncSettled, setFirstSyncSettled] = useState(false);
+  const firstSyncSettled = useAppStore((s) => s.initialSyncSettled);
+  const setFirstSyncSettled = useAppStore((s) => s.setInitialSyncSettled);
 
   const pathname = usePathname();
   const routedFor = useRef<string>('');
+
+  /**
+   * Decide what covers the window BEFORE anything is mounted over it.
+   *
+   * A widget tap goes straight to the seizure route with no intro: the clip is
+   * three seconds, and on this screen three seconds is a measurement someone
+   * loses. See src/services/launchIntent.ts.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void launchIntent().then((intent) => {
+      if (cancelled) return;
+      setIntroPhase(intent === 'emergency' ? 'done' : 'playing');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,14 +181,15 @@ export default function RootLayout() {
 
     (async () => {
       try {
-        // Opening the DB also runs any pending migrations.
-        await getDb();
+        // Opening the DB also runs any pending migrations. The app lock is a
+        // keystore read that needs neither the database nor the session, so it
+        // runs alongside rather than after — on the emergency path every
+        // avoidable round trip is elapsed seizure time.
+        const [, lockEnabled] = await Promise.all([getDb(), isAppLockEnabled()]);
 
-        // The app lock is read before anything renders. Checking it later
-        // would let the records paint for a frame behind the prompt.
-        if (await isAppLockEnabled()) {
-          if (!cancelled) setLocked(true);
-        }
+        // Checked before anything renders. Doing it later would let the
+        // records paint for a frame behind the prompt.
+        if (lockEnabled && !cancelled) setLocked(true);
 
         // Auth first: every repository read is fenced by the active user id,
         // so hydrating the dog list before the session is restored would
@@ -252,15 +293,19 @@ export default function RootLayout() {
    * the session is known — there is nobody to read it for. Keyed on the user
    * id rather than run once, so signing out and in as someone else asks the
    * new person rather than inheriting the previous answer.
+   *
+   * Deliberately NOT gated on `ready`. It needs the session and the database,
+   * both of which exist by the time `userId` is set — `ready` additionally
+   * waits for `hydrate()`, and queueing behind that put a second round trip in
+   * front of the widget's seizure route, which cannot act until consent is in.
    */
   useEffect(() => {
-    if (!ready) return;
     if (!userId) return;
     if (consentUserId === userId && consentLoaded) return;
     void loadConsent(userId).catch((e) =>
       console.warn('[startup] could not read consent', e),
     );
-  }, [ready, userId, consentUserId, consentLoaded, loadConsent]);
+  }, [userId, consentUserId, consentLoaded, loadConsent]);
 
   /**
    * Forget which redirects have already been issued when the account changes.
@@ -275,7 +320,7 @@ export default function RootLayout() {
   useEffect(() => {
     routedFor.current = '';
     setFirstSyncSettled(false);
-  }, [userId]);
+  }, [userId, setFirstSyncSettled]);
 
   /**
    * A full pull on sign-in, once the session is actually established.
@@ -301,7 +346,7 @@ export default function RootLayout() {
     return () => {
       cancelled = true;
     };
-  }, [ready, authStatus, consentLoaded, consented]);
+  }, [ready, authStatus, consentLoaded, consented, setFirstSyncSettled]);
 
   /**
    * The route gate.
@@ -526,8 +571,28 @@ export default function RootLayout() {
       <AppErrorBoundary>{body}</AppErrorBoundary>
       {/* On top of everything above, until the clip finishes — startup
           (DB, auth, hydration, the route redirect) runs underneath it, not
-          after it. */}
-      {!introDone && <AnimatedSplash onFinish={() => setIntroDone(true)} />}
+          after it.
+
+          A widget launch gets neither the clip nor the cover: `introPhase` is
+          already 'done' by the time it settles, so the seizure route is on
+          screen as soon as it can render. See IntroPhase above. */}
+      {introPhase === 'deciding' && (
+        // pointerEvents="none", matching AnimatedSplash: this is paint, not a
+        // modal, and a tap that lands in the gap should reach what is under it.
+        <View style={styles.introCover} pointerEvents="none" />
+      )}
+      {introPhase === 'playing' && (
+        /*
+          `ready || error` — startup finishing and startup FAILING are both
+          reasons to lift the intro. Holding the clip over the "PawTrack could
+          not start" screen would hide the only thing that screen exists to
+          say, for as long as the ceiling allows.
+        */
+        <AnimatedSplash
+          canFinish={ready || error !== null}
+          onFinish={() => setIntroPhase('done')}
+        />
+      )}
     </SafeAreaProvider>
   );
 }
@@ -543,4 +608,20 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   errorDetail: { textAlign: 'center' },
+  /**
+   * The one-or-two frames between JS booting and knowing what opened us.
+   *
+   * Deliberately the same flat colour as the native launch screen, so the
+   * handover is not visible at all — the alternative is the first frame of
+   * whichever screen the router picked, briefly, before the intro covers it
+   * again.
+   */
+  introCover: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.bg,
+  },
 });

@@ -23,6 +23,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import {
   getSupabase,
   isSyncConfigured,
+  readPersistedSession,
   GOOGLE_WEB_CLIENT_ID,
   GOOGLE_IOS_CLIENT_ID,
 } from '@/services/supabase';
@@ -236,6 +237,39 @@ function applySession(session: Session | null): void {
 }
 
 /**
+ * Commit a session change that has been CONFIRMED — either a real session, or
+ * a sign-out this device has proof of.
+ *
+ * Split out of the `onAuthStateChange` callback because the null case now has
+ * to check storage before it can be believed (see the listener), and the two
+ * paths must not drift: whichever one commits, it has to move the owner fence,
+ * the store, and the cached dog list together.
+ */
+function finishSessionChange(session: Session | null): void {
+  const previousUserId = useAuthStore.getState().user?.id ?? null;
+  const nextUserId = session?.user.id ?? null;
+
+  applySession(session);
+  useAuthStore.setState({
+    status: session ? 'signed-in' : 'signed-out',
+    session,
+    user: session?.user ?? null,
+  });
+
+  // WHO the rows on this phone belong to has just changed, so anything cached
+  // under the old owner is now another account's data sitting in this one's
+  // screens. Dropped and re-read before anything else runs. TOKEN_REFRESHED
+  // and USER_UPDATED fire with the same id and must not churn the store, hence
+  // the comparison rather than a blanket reset.
+  if (previousUserId !== nextUserId) {
+    void useAppStore
+      .getState()
+      .resetForAccountChange()
+      .catch((e) => console.warn('[auth] could not re-read for new account', e));
+  }
+}
+
+/**
  * End the session on THIS device and put every store back to signed-out.
  *
  * Extracted because three callers now need it and they must not drift: the
@@ -292,38 +326,67 @@ export const useAuthStore = create<AuthState>((set) => ({
       return () => {};
     }
 
-    const { data, error } = await supabase.auth.getSession();
-    if (error) console.warn('[auth] could not restore session', error.message);
+    /*
+     * ── RESTORED FROM DISK, NOT FROM THE NETWORK ──────────────────────
+     *
+     * This used to be `await supabase.auth.getSession()`, which reads like a
+     * local call and is not one: with an access token near expiry — true of
+     * any launch more than an hour after the last one — it refreshes over the
+     * network first, retrying for up to thirty seconds before giving up.
+     *
+     * Startup awaited that. So did first render, and so did the widget's
+     * seizure route, which cannot start a timer until it knows there is a
+     * session. Offline, it then reported `session: null` and the owner was
+     * sent to sign-in mid-seizure, with their session still sitting in the
+     * keystore, valid.
+     *
+     * Reading storage directly costs one keystore read and cannot fail in
+     * that direction. supabase-js still refreshes — subscribing below kicks
+     * its own initialize — and the listener corrects this state if the
+     * session turns out to be genuinely dead. See readPersistedSession().
+     */
+    const stored = await readPersistedSession();
 
-    applySession(data.session ?? null);
+    applySession(stored);
     set({
-      status: data.session ? 'signed-in' : 'signed-out',
-      session: data.session ?? null,
-      user: data.session?.user ?? null,
+      status: stored ? 'signed-in' : 'signed-out',
+      session: stored,
+      user: stored?.user ?? null,
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      const previousUserId = useAuthStore.getState().user?.id ?? null;
-      const nextUserId = session?.user.id ?? null;
-
-      applySession(session);
-      set({
-        status: session ? 'signed-in' : 'signed-out',
-        session,
-        user: session?.user ?? null,
-      });
-
-      // WHO the rows on this phone belong to has just changed, so anything
-      // cached under the old owner is now another account's data sitting in
-      // this one's screens. Dropped and re-read before anything else runs.
-      // TOKEN_REFRESHED and USER_UPDATED fire with the same id and must not
-      // churn the store, hence the comparison rather than a blanket reset.
-      if (previousUserId !== nextUserId) {
-        void useAppStore
-          .getState()
-          .resetForAccountChange()
-          .catch((e) => console.warn('[auth] could not re-read for new account', e));
+      /*
+       * ── A NULL SESSION IS NOT PROOF OF A SIGN-OUT ────────────────────
+       *
+       * supabase-js emits INITIAL_SESSION with `null` when its startup
+       * refresh fails — including when it failed because the phone has no
+       * signal. Acting on that is the same bug as above, arriving a moment
+       * later: the owner is signed out of an app whose session is still on
+       * disk, and has to type a password to record a seizure.
+       *
+       * Storage is the discriminator, and it is supabase-js's own rule. It
+       * REMOVES the stored session for a definitive failure (a revoked or
+       * already-used refresh token) and for an explicit sign-out — clearing
+       * it before this event fires — and KEEPS it for a retryable one. So a
+       * null session with something still in storage means "could not reach
+       * the server", and a null session with empty storage means "gone".
+       */
+      if (!session) {
+        void (async () => {
+          const surviving = await readPersistedSession();
+          if (surviving) {
+            // Transient. Hold the session we already have rather than
+            // downgrading it; auto-refresh will retry when signal returns.
+            applySession(surviving);
+            set({ status: 'signed-in', session: surviving, user: surviving.user });
+            return;
+          }
+          finishSessionChange(null);
+        })().catch((e) => console.warn('[auth] could not confirm sign-out', e));
+        return;
       }
+
+      finishSessionChange(session);
 
       /*
        * Adopt anything left over from before accounts were required.

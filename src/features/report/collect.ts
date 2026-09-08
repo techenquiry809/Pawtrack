@@ -13,6 +13,7 @@ import * as checkinRepo from '@/db/checkinRepo';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as videoRepo from '@/db/videoRepo';
 import { toAbsoluteUri } from '@/services/fileStore';
+import { deviceNames as readDeviceNames } from '@/services/sync/devices';
 import type {
   DailyCheckin,
   Dog,
@@ -48,6 +49,15 @@ export type ReportData = {
    * "no medication recorded" is itself clinically relevant.
    */
   medications: MedicationWithReminders[];
+  /**
+   * device_id → display name, for clips filmed on a different phone.
+   *
+   * Read here because this is the report pipeline's I/O layer and the map is
+   * report data like everything else above. Best-effort: it comes from a local
+   * cache that a device which has never synced will not have, and an unknown
+   * id degrades to "another device" at render time rather than failing.
+   */
+  deviceNames: Record<string, string>;
   /** When the file was produced. Printed, so a reader can tell how fresh it is. */
   generatedAt: number;
 };
@@ -84,13 +94,15 @@ export async function collectReport(
   dog: Dog,
   range: ReportRange,
 ): Promise<ReportData> {
-  const [seizures, checkins, doses, medications] = await Promise.all([
+  const [seizures, checkins, doses, medications, names] = await Promise.all([
     seizureRepo.listSeizuresBetween(dog.id, range.fromMs, range.toMs),
     checkinRepo.listCheckinsBetween(dog.id, range.fromKey, range.toKey),
     medicationRepo.listDosesBetween(dog.id, range.fromKey, range.toKey),
     // Best effort: a report must still be produced for a dog whose medication
     // list fails to load. The section prints what it has.
     medicationRepo.listMedications(dog.id).catch(() => [] as MedicationWithReminders[]),
+    // Same rule: a report is not worth failing over a cached name lookup.
+    readDeviceNames().catch(() => ({}) as Record<string, string>),
   ]);
 
   const withClips = await Promise.all(
@@ -113,6 +125,7 @@ export async function collectReport(
     checkins,
     doses,
     medications,
+    deviceNames: names,
     generatedAt: Date.now(),
   };
 }

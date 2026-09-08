@@ -21,7 +21,7 @@ import { AppState, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import * as ExpoCrypto from 'expo-crypto';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * Also before the supabase-js import: auth-js needs `crypto.getRandomValues`
@@ -182,6 +182,98 @@ export const SecureStoreAdapter = {
     }
   },
 };
+
+/* ------------------------------------------------------------------ */
+/* Reading the stored session without a network round trip             */
+/* ------------------------------------------------------------------ */
+/**
+ * ── WHY THIS EXISTS, AND WHY IT IS NOT `getSession()` ─────────────────
+ *
+ * `supabase.auth.getSession()` looks like a local read and is not one. When
+ * the stored access token is within 90 seconds of expiry — which, for a
+ * one-hour token, is true of essentially every launch that is not minutes
+ * after the last one — it refreshes over the network first. Offline, that
+ * retries with exponential backoff for up to thirty seconds and then reports
+ * `session: null`.
+ *
+ * Two things follow, and the app was doing both:
+ *
+ *   1. Startup awaited it, so first render waited on a network call. From the
+ *      widget, that is elapsed seizure time.
+ *   2. A null result was read as "signed out", so an owner with no signal was
+ *      sent to the sign-in screen — while their dog was seizing — even though
+ *      their session was still sitting on disk, perfectly valid.
+ *
+ * The second one is the reason this file grew a function. supabase-js keeps
+ * the stored session when a refresh fails for a RETRYABLE reason (no signal,
+ * timeout) and removes it only when the failure is definitive (a revoked or
+ * already-used refresh token). So "is there still a session in storage" is the
+ * honest answer to "is this owner still signed in", and it costs one keystore
+ * read.
+ *
+ * See `initialize` in src/store/authStore.ts for how it is used.
+ */
+
+/** The shape supabase-js persists. Only the parts we depend on. */
+type StoredSession = {
+  access_token?: unknown;
+  refresh_token?: unknown;
+  user?: { id?: unknown } | null;
+};
+
+/**
+ * Where supabase-js keeps the session.
+ *
+ * Taken from the client itself when it is available — that is the value
+ * actually in use — and derived the same way supabase-js derives it otherwise.
+ * Deliberately NOT set explicitly in `createClient`: changing the key would
+ * orphan the session on every phone that already has one, signing everybody
+ * out on upgrade.
+ */
+function authStorageKey(): string | null {
+  const fromClient = (client as unknown as { storageKey?: string } | null)?.storageKey;
+  if (fromClient) return fromClient;
+  try {
+    return `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The session on disk, or null if there genuinely is not one.
+ *
+ * Never touches the network and never throws: a launch must not fail because
+ * the keystore was unreadable or held something unparseable. Both of those
+ * resolve to null, which routes to sign-in — recoverable, and the same thing
+ * that happens today when the store is empty.
+ */
+export async function readPersistedSession(): Promise<Session | null> {
+  if (!isSyncConfigured()) return null;
+  const key = authStorageKey();
+  if (!key) return null;
+
+  try {
+    const raw = await SecureStoreAdapter.getItem(key);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as StoredSession;
+    // A session without these is not one we can act on, and treating a
+    // half-written blob as a signed-in owner would fence every local read to
+    // an undefined user id — which matches no rows at all.
+    if (
+      typeof parsed?.access_token !== 'string' ||
+      typeof parsed?.refresh_token !== 'string' ||
+      typeof parsed?.user?.id !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as unknown as Session;
+  } catch (error) {
+    console.warn('[auth] could not read the stored session', error);
+    return null;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* The client                                                          */

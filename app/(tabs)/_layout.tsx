@@ -14,6 +14,7 @@
  * dog-scoped, so there is nothing meaningful to show without one.
  */
 
+import { StyleSheet, View } from 'react-native';
 import { Redirect, Tabs } from 'expo-router';
 import { useAppStore } from '@/store/appStore';
 import { UnfinishedSeizurePrompt } from '@/components/UnfinishedSeizurePrompt';
@@ -22,8 +23,35 @@ import { colors } from '@/theme/tokens';
 
 export default function TabsLayout() {
   const dogs = useAppStore((s) => s.dogs);
+  const hydrated = useAppStore((s) => s.hydrated);
+  const initialSyncSettled = useAppStore((s) => s.initialSyncSettled);
 
+  /*
+   * ── AN EMPTY DOG LIST IS NOT YET AN ANSWER ────────────────────────────
+   *
+   * This used to redirect on `dogs.length === 0` alone, which is only true of
+   * a phone that has finished finding out. Two states reach here with an
+   * empty list and no dog missing:
+   *
+   *   - the store has been dropped and is being re-read (`hydrated` false),
+   *     which is what a sign-out and back in does;
+   *   - the account's dog is still on its way down from the server, which is
+   *     every first launch on a second device.
+   *
+   * Redirecting on either asked the owner to create a dog they already have,
+   * and — because this is the layout, not a screen — it did so by unmounting
+   * the entire tab tree and mounting it again a moment later. Every screen in
+   * it lost its state and reloaded from scratch, which is what the flash of a
+   * half-loaded Home screen actually was.
+   *
+   * So the redirect now waits for the same evidence the root gate waits for,
+   * and holds a plain background until then. See `initialSyncSettled` in
+   * src/store/appStore.ts.
+   */
   if (dogs.length === 0) {
+    if (!hydrated || !initialSyncSettled) {
+      return <View style={styles.holding} />;
+    }
     return <Redirect href="/onboarding" />;
   }
 
@@ -72,3 +100,8 @@ export default function TabsLayout() {
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  /** The page colour, and nothing else, while the dog list settles. */
+  holding: { flex: 1, backgroundColor: colors.bg },
+});

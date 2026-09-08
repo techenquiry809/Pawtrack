@@ -26,8 +26,36 @@ type AppState = {
   activeDogId: string | null;
   settings: Settings;
   hydrated: boolean;
+  /**
+   * Whether the first sync since this account signed in has finished —
+   * succeeded, failed, or found nothing.
+   *
+   * ── WHY THIS IS IN THE STORE AND NOT IN THE ROOT LAYOUT ───────────────
+   *
+   * Because two places have to agree about it, and while it was local state in
+   * app/_layout.tsx only one of them could see it.
+   *
+   * An EMPTY dog list means two different things. On a phone that has finished
+   * syncing it means "this account has no dog, ask for one". In the seconds
+   * after signing in on a NEW device it means "the dog is still on its way" —
+   * SQLite is empty because nothing has arrived yet, not because there is
+   * nothing to arrive. The root gate was careful about that distinction and
+   * held its redirect until the sync settled. app/(tabs)/_layout.tsx was not:
+   * it redirected to onboarding on `dogs.length === 0` alone.
+   *
+   * So the gate would correctly send a second device to the tabs, the tab
+   * layout would immediately bounce it to onboarding, and the owner was asked
+   * to create the dog their account already had — one confirm away from a
+   * duplicate. It also tore the whole tab tree down and back up on the way,
+   * remounting every screen in it.
+   *
+   * Reset by `resetForAccountChange`, because it is a statement about the
+   * account that is signed in now.
+   */
+  initialSyncSettled: boolean;
 
   hydrate: () => Promise<void>;
+  setInitialSyncSettled: (settled: boolean) => void;
   refreshDogs: () => Promise<void>;
   /**
    * Re-read everything for a DIFFERENT owner, after the session changed.
@@ -74,6 +102,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeDogId: null,
   settings: DEFAULT_SETTINGS,
   hydrated: false,
+  initialSyncSettled: false,
+
+  setInitialSyncSettled: (settled) => set({ initialSyncSettled: settled }),
 
   hydrate: async () => {
     const dogs = await dogRepo.listDogs();
@@ -99,7 +130,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   resetForAccountChange: async () => {
-    set({ dogs: [], activeDogId: null, hydrated: false });
+    // `initialSyncSettled` goes with them: it describes the account that just
+    // left, and leaving it up would let the incoming one be judged "has no
+    // dog" against a sync that ran for somebody else.
+    set({ dogs: [], activeDogId: null, hydrated: false, initialSyncSettled: false });
     await get().hydrate();
   },
 

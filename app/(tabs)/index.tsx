@@ -60,6 +60,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated, AppState, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View,
+  type AppStateStatus,
   type LayoutChangeEvent,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -254,7 +255,30 @@ export default function HomeScreen() {
 
   const dogId = dog?.id;
 
-  const load = useCallback(async () => {
+  /**
+   * The load currently in flight, so two callers share one round of queries.
+   *
+   * ── WHY THIS IS NOT JUST "DELETE ONE OF THE CALLERS" ──────────────────
+   *
+   * Two things ask Home to refresh and BOTH are correct. `useFocusEffect`
+   * refreshes on returning to the tab. The AppState listener refreshes on
+   * returning to the foreground, which is the case that actually matters —
+   * the phone left on Home overnight has to notice that the 4am pulse day
+   * rolled over (see the note on that effect).
+   *
+   * They only collide when one event implies the other: coming back from a
+   * deep link, or from another app, fires foreground AND focus a few
+   * milliseconds apart. Measured on a release build, that was two overlapping
+   * loads 20ms apart issuing six queries where three would do.
+   *
+   * So neither caller is removed — the work is shared. A second caller
+   * arriving while the first is still running awaits the same promise instead
+   * of starting its own. Sequential calls are unaffected: `onPickEnergy`
+   * awaits `load()` after writing, and by then nothing is in flight.
+   */
+  const inFlight = useRef<Promise<void> | null>(null);
+
+  const runLoad = useCallback(async () => {
     if (!dogId) return;
     try {
       const [list, today, gallery] = await Promise.all([
@@ -279,6 +303,16 @@ export default function HomeScreen() {
       setLoading(false);
     }
   }, [dogId]);
+
+  const load = useCallback(() => {
+    if (inFlight.current) return inFlight.current;
+    const p = runLoad().finally(() => {
+      inFlight.current = null;
+    });
+    inFlight.current = p;
+    return p;
+  }, [runLoad]);
+
 
   // useFocusEffect (not useEffect) so the dashboard refreshes every time the
   // user returns to it — e.g. straight after saving a seizure.
@@ -306,8 +340,25 @@ export default function HomeScreen() {
    * refreshes every day.
    */
   useEffect(() => {
+    /*
+     * ── ONLY A REAL RETURN TO THE FOREGROUND ──────────────────────────
+     *
+     * `state === 'active'` alone also matches the transition every COLD START
+     * makes on its way up. So launching the app ran this load a second time,
+     * a few hundred milliseconds after the focus effect had already run it —
+     * measured at 314ms and 462ms on a release build, six queries where three
+     * would do, to refresh data that was that old.
+     *
+     * Tracking the previous state is what distinguishes "came back from the
+     * background", which genuinely may have missed a 4am rollover, from
+     * "started up", which cannot have. Same guard, and the same reason, as
+     * `startSyncTriggers` in services/sync/worker.ts.
+     */
+    let lastState: AppStateStatus = AppState.currentState;
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void load();
+      const cameForward = lastState !== 'active' && state === 'active';
+      lastState = state;
+      if (cameForward) void load();
     });
     return () => sub.remove();
   }, [load]);
@@ -480,6 +531,36 @@ export default function HomeScreen() {
       })()
     : undefined;
 
+  /**
+   * Whether the slot should be the plain status bar THIS RENDER.
+   *
+   * ── WHY THIS IS DERIVED AND NOT JUST `pulseStage` ─────────────────────
+   *
+   * `pulseStage` is moved to 'summary' by an effect, and an effect runs after
+   * the commit that caused it. `load()` sets `checkin` and clears `loading`
+   * together, so React paints one frame in which the day's answer is already
+   * in hand and the stage still says 'ask' — and that frame draws the
+   * full-height asking card, for a day that was answered hours ago. The next
+   * frame collapses it into the bar.
+   *
+   * That one frame is the glitch. It was photographed doing exactly this:
+   * the card reading "Lucy is bouncy today" — the loaded value — above a row
+   * of mood faces that had not finished decoding, replaced a beat later by
+   * the status bar carrying the same answer.
+   *
+   * Gating the slot on `loading` did not fix it, because by then loading is
+   * already false. The state has to be computed from the DATA during render,
+   * not read from a stage the effect has not caught up to.
+   *
+   * The one case that must NOT take this path is an answer given in this
+   * session: `answeredDay` marks it, and the celebration and its morph own
+   * the slot until they finish. See `pulseStage` and the morph effect.
+   */
+  const showPulseBar =
+    !!answeredStep &&
+    (pulseStage === 'summary' ||
+      (pulseStage === 'ask' && answeredDay.current !== pulseDay));
+
   const last = seizures[0];
   /** The five most recent, newest first. listSeizuresSince already sorts DESC. */
   const recent = seizures.slice(0, 5);
@@ -643,7 +724,11 @@ export default function HomeScreen() {
         </Pressable>
 
         <Pressable
-          onPress={() => router.push('/more')}
+          // '/(tabs)/more', not '/more'. Both resolve to the same screen, but
+          // every other tab jump in this file is written the long way, and one
+          // that is not is the kind of difference someone later reads as
+          // meaningful.
+          onPress={() => router.push('/(tabs)/more')}
           accessibilityRole="button"
           accessibilityLabel="Settings"
           hitSlop={6}
@@ -655,8 +740,25 @@ export default function HomeScreen() {
 
       {/* --- Daily pulse ------------------------------------------------
           Asks once per pulse day, then becomes the status bar in the same
-          slot. See `pulseStage` and the morph effect. */}
-      {pulseStage === 'summary' && answeredStep ? (
+          slot. See `pulseStage` and the morph effect.
+
+          ── NOTHING AT ALL UNTIL THE DAY'S ANSWER IS IN ──────────────────
+
+          `checkin` starts null and `pulseStage` starts 'ask', so for the
+          length of the first load this slot was rendering the FULL asking
+          card — for a day that may well have been answered hours ago. When
+          the read came back it snapped to the status bar, a third of the
+          height, taking the rest of the screen up with it.
+
+          That is the flash: not an old layout leaking in, but this screen
+          confidently drawing the wrong one of its two states before it had
+          read anything. Null until `loading` clears means the first thing
+          drawn here is the right thing. The read is local SQLite, so the gap
+          is a frame or two — and on a cold start it sits behind the intro.
+
+          Records screen does the same with its own `loaded` flag; this is
+          that rule, applied to the one screen that had missed it. */}
+      {loading ? null : showPulseBar && answeredStep ? (
         /*
           Rendered PLAINLY, with no morph container around it.
           Nothing just happened — the day was already answered before this
@@ -876,7 +978,7 @@ export default function HomeScreen() {
           label and a value, so the eye can find a single figure without having
           to read the whole block.
         */}
-        <DayBars days={trend} />
+        <DayBars days={trend} loaded={!loading} />
 
         {/*
           Two by two, not four stacked rows.
@@ -888,31 +990,45 @@ export default function HomeScreen() {
           the card loses a third of its height without losing a number.
         */}
         <View style={styles.statGrid}>
+          {/*
+            Every figure here is em-dashed until the read lands.
+
+            "None yet", "0" and "0" are all statements about this dog's
+            record, and for the first frames of a visit they were being made
+            about an empty array rather than about the database. An owner
+            glancing at the screen saw "no seizures in the last 30 days" and
+            then watched it change — which is the worst possible order to show
+            those two things in.
+          */}
           <StatCell
             icon="clock"
             label="Most recent"
             value={
-              daysSince === null
-                ? 'None yet'
-                : daysSince === 0
-                  ? 'Today'
-                  : `${daysSince}d ago`
+              loading
+                ? '—'
+                : daysSince === null
+                  ? 'None yet'
+                  : daysSince === 0
+                    ? 'Today'
+                    : `${daysSince}d ago`
             }
           />
           <StatCell
             icon="calendar"
             label="Last 7 days"
-            value={`${week.length}`}
+            value={loading ? '—' : `${week.length}`}
           />
           <StatCell
             icon="trend"
             label="Last 30 days"
-            value={`${month.length}`}
+            value={loading ? '—' : `${month.length}`}
           />
           <StatCell
             icon="timer"
             label="Typical length"
-            value={avgDuration === null ? '—' : formatDuration(avgDuration)}
+            value={
+              loading || avgDuration === null ? '—' : formatDuration(avgDuration)
+            }
           />
         </View>
       </View>
@@ -1140,7 +1256,17 @@ export default function HomeScreen() {
  * bare bars on a quiet history render as a row of stubs that reads like a
  * dashed line rather than a chart.
  */
-function DayBars({ days }: { days: number[] }) {
+/**
+ * `loaded` is not cosmetic.
+ *
+ * `days` is derived from a seizure list that is empty until the first read
+ * returns, and an empty list is indistinguishable here from a genuine run of
+ * quiet days — so this chart spent the opening frames of every visit stating
+ * "No seizures in the last 14 days" to a screen reader, and drawing fourteen
+ * recorded zeroes to everyone else, before filling in. Absence of data is not
+ * a zero, and on this dataset saying so is a clinical claim.
+ */
+function DayBars({ days, loaded }: { days: number[]; loaded: boolean }) {
   const peak = Math.max(1, ...days);
   const total = days.reduce((sum, n) => sum + n, 0);
   const busiest = Math.max(...days);
@@ -1159,10 +1285,12 @@ function DayBars({ days }: { days: number[] }) {
         style={styles.spark}
         accessible
         accessibilityLabel={
-          total === 0
-            ? `No seizures in the last ${days.length} days`
-            : `${total} seizure${total === 1 ? '' : 's'} in the last ${days.length} days. ` +
-              `Busiest day had ${busiest}. Today had ${days[days.length - 1] ?? 0}.`
+          !loaded
+            ? 'Loading seizure history'
+            : total === 0
+              ? `No seizures in the last ${days.length} days`
+              : `${total} seizure${total === 1 ? '' : 's'} in the last ${days.length} days. ` +
+                `Busiest day had ${busiest}. Today had ${days[days.length - 1] ?? 0}.`
         }
       >
         {days.map((n, i) => {
@@ -1172,10 +1300,10 @@ function DayBars({ days }: { days: number[] }) {
               {/* The number, above its bar. Height alone cannot be read as a
                   value, and this is the figure a vet is told. */}
               <Text
-                style={[styles.sparkCount, n === 0 && styles.sparkCountOff]}
+                style={[styles.sparkCount, (n === 0 || !loaded) && styles.sparkCountOff]}
                 numberOfLines={1}
               >
-                {n > 0 ? n : '·'}
+                {loaded && n > 0 ? n : '·'}
               </Text>
               {/* Every day keeps a track, so an empty day reads as a recorded
                   zero rather than as missing data. */}
@@ -1185,9 +1313,11 @@ function DayBars({ days }: { days: number[] }) {
                     styles.sparkBar,
                     {
                       height:
-                        n === 0 ? 3 : Math.max(6, Math.round((n / peak) * BAR_H)),
+                        !loaded || n === 0
+                          ? 3
+                          : Math.max(6, Math.round((n / peak) * BAR_H)),
                       backgroundColor:
-                        n === 0
+                        !loaded || n === 0
                           ? colors.line
                           : isToday
                             ? colors.tealDeep

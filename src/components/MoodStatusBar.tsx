@@ -33,7 +33,7 @@
  * other card on the screen.
  *
  * The tile behind the face went the same way, for a harder reason: the mood
- * artwork has NO ALPHA CHANNEL. `src/assets/moods/*.png` are RGB 192×192 with
+ * artwork has NO ALPHA CHANNEL. `src/assets/moods/*.png` are RGB 156×156 with
  * an opaque near-white field, so anything placed behind them shows up as a
  * white square around the dog rather than as a frame. It is invisible in the
  * pulse row only because that row sits on a white card. Put the same image on
