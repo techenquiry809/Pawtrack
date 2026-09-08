@@ -26,6 +26,8 @@ import { useActiveDog } from '@/store/appStore';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as reminders from '@/services/medicationReminders';
 import { REMINDER_TIME_RE, type MedicationReminder } from '@/types/domain';
+import { TimePickerDialog } from '@/components/TimePickerDialog';
+import { formatTimeOfDay } from '@/utils/time';
 
 /** Common dosing clock times. A shortcut for entry, never a recommendation. */
 const QUICK_TIMES = ['07:00', '08:00', '12:00', '18:00', '20:00', '22:00'];
@@ -43,7 +45,18 @@ export default function MedicationEditScreen() {
   const [frequency, setFrequency] = useState('');
   const [prescriber, setPrescriber] = useState('');
   const [times, setTimes] = useState<MedicationReminder[]>([]);
-  const [customTime, setCustomTime] = useState('');
+  /**
+   * Which reminder the clock is open for.
+   *
+   *   null       closed
+   *   'new'      adding one
+   *   <id>       editing that reminder's time
+   *
+   * One dialog, two jobs, because they ask the identical question — the only
+   * difference is where the answer goes.
+   */
+  const [picking, setPicking] = useState<null | 'new' | string>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(!isEdit);
@@ -132,13 +145,23 @@ export default function MedicationEditScreen() {
   };
 
   const onAddTime = (timeHHMM: string) => {
+    /*
+     * The clock cannot produce a malformed time, and the quick chips are
+     * constants — so this can only fail if one of those two changes. It is
+     * kept as a guard on the write rather than as validation of typing, which
+     * is what it used to be: the free-text "Other (HH:MM)" field is gone.
+     */
     if (!REMINDER_TIME_RE.test(timeHHMM)) {
-      setError('Use a 24-hour time like 08:00.');
+      setError('Could not read that time. Please try again.');
       return;
     }
-    if (times.some((t) => t.timeHHMM === timeHHMM)) return;
+    if (times.some((t) => t.timeHHMM === timeHHMM)) {
+      setPickError('There is already a reminder at that time.');
+      return;
+    }
     setError(null);
-    setCustomTime('');
+    setPickError(null);
+    setPicking(null);
 
     if (!isEdit) {
       // Held locally until the medication row exists to attach them to.
@@ -155,6 +178,67 @@ export default function MedicationEditScreen() {
       await addTime(id, timeHHMM);
       const med = await medicationRepo.getMedication(id);
       if (med) setTimes(med.reminders);
+    })();
+  };
+
+  /**
+   * Move an existing reminder to a new time.
+   *
+   * A medication that has not been saved yet has no rows to update, so its
+   * times are edited in the local list; a saved one goes through the repo and
+   * has its notification rebuilt, because the OS is holding a schedule for the
+   * old time that nothing else will ever cancel.
+   */
+  const onEditTime = (reminderId: string, timeHHMM: string) => {
+    if (!REMINDER_TIME_RE.test(timeHHMM)) return;
+    if (times.some((t) => t.id !== reminderId && t.timeHHMM === timeHHMM)) {
+      setPickError('There is already a reminder at that time.');
+      return;
+    }
+    setPickError(null);
+    setPicking(null);
+
+    if (reminderId.startsWith('pending_')) {
+      setTimes((prev) =>
+        prev
+          .map((t) => (t.id === reminderId ? { ...t, id: `pending_${timeHHMM}`, timeHHMM } : t))
+          .sort((a, b) => a.timeHHMM.localeCompare(b.timeHHMM)),
+      );
+      return;
+    }
+
+    // Narrowed for the closure: `id` is `string | undefined` on the route,
+    // and a non-pending reminder can only exist on a saved medication.
+    const medId = id;
+    if (!medId) return;
+
+    void (async () => {
+      const previous = times.find((t) => t.id === reminderId);
+      const moved = await medicationRepo.setReminderTime(reminderId, timeHHMM);
+      if (!moved) {
+        setPickError('There is already a reminder at that time.');
+        return;
+      }
+      // Cancel the alarm for the OLD time before scheduling the new one. The
+      // handle is per-device (see setReminderNotificationId), so skipping this
+      // leaves a notification firing at a time the app no longer knows about.
+      if (previous) await reminders.cancelReminder(previous);
+
+      const med = await medicationRepo.getMedication(medId);
+      if (!med) return;
+      setTimes(med.reminders);
+
+      const updated = med.reminders.find((r) => r.id === reminderId);
+      if (updated?.enabled) {
+        await reminders.scheduleReminder({
+          id: updated.id,
+          timeHHMM: updated.timeHHMM,
+          medicationName: name.trim(),
+          dogName: dog.name,
+          dose,
+          unit,
+        });
+      }
     })();
   };
 
@@ -234,12 +318,29 @@ export default function MedicationEditScreen() {
           <View style={styles.timeList}>
             {times.map((t) => (
               <View key={t.id} style={styles.timeRow}>
-                <Text style={styles.timeValue}>{t.timeHHMM}</Text>
-                <Muted style={styles.flexOne}>Every day</Muted>
+                {/*
+                  The time itself is the edit control. A reminder set to the
+                  wrong hour used to be a remove-then-add-again, which loses
+                  the row and, on a saved medication, the toggle state with it.
+                */}
+                <Pressable
+                  onPress={() => {
+                    setPickError(null);
+                    setPicking(t.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Change the ${formatTimeOfDay(t.timeHHMM)} reminder`}
+                  accessibilityHint="Opens the clock"
+                  hitSlop={{ top: 6, bottom: 6 }}
+                  style={({ pressed }) => [styles.timeEdit, pressed && styles.pressed]}
+                >
+                  <Text style={styles.timeValue}>{formatTimeOfDay(t.timeHHMM)}</Text>
+                  <Muted style={styles.timeEditHint}>Every day · tap to change</Muted>
+                </Pressable>
                 <Pressable
                   onPress={() => onRemoveTime(t)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Remove the ${t.timeHHMM} reminder`}
+                  accessibilityLabel={`Remove the ${formatTimeOfDay(t.timeHHMM)} reminder`}
                   hitSlop={{ top: 4, bottom: 4 }}
                   style={({ pressed }) => [styles.removeBtn, pressed && styles.pressed]}
                 >
@@ -257,34 +358,52 @@ export default function MedicationEditScreen() {
               key={q}
               onPress={() => onAddTime(q)}
               accessibilityRole="button"
-              accessibilityLabel={`Add a reminder at ${q}`}
+              accessibilityLabel={`Add a reminder at ${formatTimeOfDay(q)}`}
               hitSlop={{ top: 4, bottom: 4 }}
               style={({ pressed }) => [styles.quickChip, pressed && styles.pressed]}
             >
-              <Text style={styles.quickChipLabel}>{q}</Text>
+              <Text style={styles.quickChipLabel}>{formatTimeOfDay(q)}</Text>
             </Pressable>
           ))}
         </View>
 
-        <View style={styles.customRow}>
-          <TextInput
-            style={[styles.input, styles.customInput]}
-            value={customTime}
-            onChangeText={setCustomTime}
-            placeholder="Other (HH:MM)"
-            placeholderTextColor={colors.inkSoft}
-            keyboardType="numbers-and-punctuation"
-            maxLength={5}
-            accessibilityLabel="Custom reminder time, 24 hour"
-          />
-          <Button
-            label="Add"
-            variant="ghost"
-            onPress={() => onAddTime(customTime.trim())}
-            style={styles.addBtn}
-          />
-        </View>
+        {/*
+          A clock, not a text field. This was "Other (HH:MM)" with a regex
+          behind it that rejected `8:00`, `8 pm` and `20.00` — three of the
+          four ways people actually write a time — while setting an alarm for
+          medication. See components/TimePickerDialog.tsx.
+        */}
+        <Button
+          label="Pick another time"
+          variant="ghost"
+          onPress={() => {
+            setPickError(null);
+            setPicking('new');
+          }}
+        />
       </Card>
+
+      <TimePickerDialog
+        visible={picking !== null}
+        title={picking === 'new' ? 'Add a reminder time' : 'Change this reminder'}
+        // Editing starts from the reminder's own time; adding starts at a
+        // plausible morning dose rather than at midnight, which nobody wants
+        // and which is the furthest point from every realistic answer.
+        value={
+          (picking && picking !== 'new'
+            ? times.find((t) => t.id === picking)?.timeHHMM
+            : null) ?? '08:00'
+        }
+        error={pickError}
+        onCancel={() => {
+          setPickError(null);
+          setPicking(null);
+        }}
+        onConfirm={(timeHHMM) => {
+          if (picking === 'new') onAddTime(timeHHMM);
+          else if (picking) onEditTime(picking, timeHHMM);
+        }}
+      />
 
       {error ? <Body style={styles.error}>{error}</Body> : null}
 
@@ -373,14 +492,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
   },
+  // The tappable half of the row: the time and what it does, as one target.
+  timeEdit: { flex: 1, justifyContent: 'center', paddingVertical: spacing.sm, gap: 1 },
   timeValue: {
     fontSize: fontSize.md,
     fontWeight: '700',
     color: colors.ink,
+    // Tabular figures so a column keeps its digits aligned even though
+    // '7:00 am' and '12:30 pm' are different widths.
     fontVariant: ['tabular-nums'],
-    minWidth: 56,
     fontFamily: fontFamily.bold
   },
+  timeEditHint: { fontSize: fontSize.xs },
   // 40pt painted, below MIN_TOUCH_TARGET. The Pressable carries hitSlop to
   // restore a 48pt tap area — growing the box instead would break the row.
   removeBtn: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 6 },
@@ -412,9 +535,6 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold
   },
 
-  customRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
-  customInput: { flex: 1 },
-  addBtn: { paddingHorizontal: spacing.lg },
 
   error: { color: colors.redDeep, marginBottom: spacing.sm },
 });

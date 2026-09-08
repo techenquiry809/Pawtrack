@@ -24,10 +24,22 @@
  *      it — see AuthField on why those two props decide whether people end up
  *      with a generated password or a reused one.
  *
- * ── SIGNING IN IS STILL OPTIONAL ──────────────────────────────────────
+ * ── THIS SCREEN DOES ONE JOB ──────────────────────────────────────────
  *
- * Every record works offline and always has. An account adds backup and a
- * second device, nothing more. "Not now" stays a first-class option.
+ * It used to do three. The reset flow and the signup code box were cards that
+ * unfolded underneath the form, so a locked-out owner could be looking at a
+ * password field, a code field and two different submit buttons at once, and
+ * had to work out which pair was addressed to them.
+ *
+ * Each step is now its own screen:
+ *
+ *   /forgot-password  which address should the code go to
+ *   /verify           the 6-digit code, for signup and reset alike
+ *   /new-password     choose the replacement
+ *
+ * All of them end back here, because this is the one place a session begins —
+ * including straight after confirming an email or resetting a password, which
+ * is what the `notice` param below is reporting.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -42,7 +54,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -53,59 +65,84 @@ import { AuthField } from '@/components/AuthField';
 import { PawTrail } from '@/components/PawTrail';
 import { colors, fontFamily, fontSize, radius, shadow, spacing } from '@/theme/tokens';
 import { duration, useReducedMotion } from '@/theme/motion';
-import {
-  accountsAvailable,
-  appleSignInAvailable,
-  useAuthStore,
-  secondsUntil,
-} from '@/store/authStore';
+import { accountsAvailable, useAuthStore, secondsUntil } from '@/store/authStore';
 import { clearStrandedRowCount, strandedRowCount } from '@/services/sync/devices';
-import { dismissAuthPrompt } from '@/services/authPrompt';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** What the screen says when a flow hands back to it. */
+const NOTICES: Record<string, { title: string; body: string }> = {
+  confirmed: {
+    title: 'Email confirmed',
+    body: 'Your account is ready. Sign in with the password you just chose.',
+  },
+  reset: {
+    title: 'Password updated',
+    body: 'Sign in with your new password.',
+  },
+};
 
 export default function SignInScreen() {
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
+  const params = useLocalSearchParams<{ notice?: string }>();
 
   const busy = useAuthStore((s) => s.busy);
   const error = useAuthStore((s) => s.error);
   const awaitingConfirmation = useAuthStore((s) => s.awaitingConfirmation);
-  const signInWithApple = useAuthStore((s) => s.signInWithApple);
   const signInWithGoogle = useAuthStore((s) => s.signInWithGoogle);
   const signInWithPassword = useAuthStore((s) => s.signInWithPassword);
-  const sendPasswordReset = useAuthStore((s) => s.sendPasswordReset);
   const setError = useAuthStore((s) => s.setError);
   const signInBlockedUntil = useAuthStore((s) => s.signInBlockedUntil);
-  const resetEmailAllowedAt = useAuthStore((s) => s.resetEmailAllowedAt);
 
   /*
-   * A once-a-second tick, alive only while something is actually counting
+   * A once-a-second tick, alive only while the backoff is actually counting
    * down. A disabled button with no explanation is the state that reads as a
    * broken app, so the label carries the remaining seconds — and the interval
    * exists solely to keep that number honest.
    */
   const [, setTick] = useState(0);
-  const counting = signInBlockedUntil !== null || resetEmailAllowedAt !== null;
   useEffect(() => {
-    if (!counting) return;
+    if (signInBlockedUntil === null) return;
     const id = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [counting]);
+  }, [signInBlockedUntil]);
 
   const blockedSeconds = secondsUntil(signInBlockedUntil);
-  const resetSeconds = secondsUntil(resetEmailAllowedAt);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
-  const [resetSent, setResetSent] = useState(false);
   const [stranded, setStranded] = useState(0);
+
+  /**
+   * The hand-back notice, copied out of the route param on first render.
+   *
+   * Held in state rather than read from `params` each time so it can be
+   * dismissed. A param cannot be un-set by tapping a close button, and a
+   * "Password updated" banner that will not go away is its own small bug.
+   */
+  const [notice, setNotice] = useState(() =>
+    params.notice ? (NOTICES[params.notice] ?? null) : null,
+  );
+
+  /*
+   * An unconfirmed account cannot sign in, and the fix is a code, not another
+   * password attempt. `signInWithPassword` sets this when the server says as
+   * much, so the owner is moved to the screen that can actually finish it
+   * rather than being told off by a form that will keep refusing them.
+   */
+  useEffect(() => {
+    if (!awaitingConfirmation) return;
+    // `awaitingConfirmation` is already the address /verify reads; only the
+    // mode travels in the URL. See `resetEmail` in authStore on why.
+    router.push({ pathname: '/verify', params: { mode: 'signup' } });
+  }, [awaitingConfirmation]);
 
   useEffect(() => {
     // Reads SQLite, so it can reject, and it can resolve after the owner has
-    // already tapped "Not now" and left. Zero is the right fallback: the
-    // stranded-rows notice simply does not appear.
+    // already left. Zero is the right fallback: the stranded-rows notice
+    // simply does not appear.
     let cancelled = false;
     void strandedRowCount()
       .then((n) => {
@@ -155,7 +192,7 @@ export default function SignInScreen() {
    *
    * Held rather than inferred: the error card sits above the provider buttons
    * and below the password form, so there is no way to tell from the error
-   * alone which of the three the owner had pressed. Retrying the wrong one is
+   * alone which of the two the owner had pressed. Retrying the wrong one is
    * worse than not offering retry.
    */
   const lastAttempt = useRef<(() => Promise<void>) | null>(null);
@@ -167,18 +204,9 @@ export default function SignInScreen() {
 
   const onSignIn = async () => {
     setError(null);
+    setNotice(null);
     if (!validate()) return;
     await attempt(() => signInWithPassword(email, password));
-  };
-
-  const onForgot = async () => {
-    setError(null);
-    if (!EMAIL_RE.test(email.trim())) {
-      setFieldErrors({ email: 'Enter your email address first, then tap this.' });
-      return;
-    }
-    await sendPasswordReset(email);
-    setResetSent(true);
   };
 
   return (
@@ -220,6 +248,14 @@ export default function SignInScreen() {
             </Animated.View>
           </View>
 
+          {notice && (
+            <Animated.View style={[styles.card, styles.successCard, rise]}>
+              <Heading>{notice.title}</Heading>
+              <Body style={styles.cardBody}>{notice.body}</Body>
+              <Button label="Got it" variant="ghost" onPress={() => setNotice(null)} />
+            </Animated.View>
+          )}
+
           {stranded > 0 && (
             <Animated.View style={[styles.card, styles.noticeCard, rise]}>
               <Heading>This device was signed out</Heading>
@@ -249,13 +285,12 @@ export default function SignInScreen() {
                 this phone. Backup and multi-device sync need a Supabase
                 project configured.
               </Body>
-              <Button
-                label="Continue"
-                onPress={() => {
-                  void dismissAuthPrompt();
-                  router.replace('/(tabs)');
-                }}
-              />
+              {/*
+                No "Continue" button. An account is required, and this build
+                cannot create one — so there is nothing honest to offer here
+                beyond saying so. Sending the owner into the app would put them
+                straight back on this screen at the next launch.
+              */}
             </Animated.View>
           ) : (
             <Animated.View style={[styles.stack, rise]}>
@@ -305,49 +340,24 @@ export default function SignInScreen() {
                   disabled={blockedSeconds > 0}
                 />
 
+                {/*
+                  A link OUT, not a card that unfolds in place. The reset flow
+                  is three steps and each one deserves the whole screen — see
+                  the note at the top of this file.
+                */}
                 <Pressable
-                  onPress={() => void onForgot()}
+                  onPress={() => {
+                    setError(null);
+                    setNotice(null);
+                    router.push('/forgot-password');
+                  }}
                   hitSlop={8}
                   accessibilityRole="button"
-                  disabled={resetSeconds > 0}
                   style={styles.forgot}
                 >
-                  <Text
-                    style={[styles.forgotText, resetSeconds > 0 && styles.forgotWaiting]}
-                  >
-                    {resetSeconds > 0
-                      ? `You can send another email in ${resetSeconds}s`
-                      : 'Forgot your password?'}
-                  </Text>
+                  <Text style={styles.forgotText}>Forgot your password?</Text>
                 </Pressable>
               </View>
-
-              {/*
-                Confirmation and reset both end in "go and read your email", so
-                they share a treatment. Being specific about WHICH email was
-                sent is what stops the owner hunting for the wrong one.
-              */}
-              {resetSent && (
-                <View style={[styles.card, styles.infoCard]}>
-                  <Heading>Check your email</Heading>
-                  <Body style={styles.cardBody}>
-                    If an account exists for{' '}
-                    <Text style={styles.strong}>{email.trim()}</Text>, we&rsquo;ve
-                    sent a link to reset the password.
-                  </Body>
-                </View>
-              )}
-
-              {awaitingConfirmation && !resetSent && (
-                <View style={[styles.card, styles.infoCard]}>
-                  <Heading>Confirm your email first</Heading>
-                  <Body style={styles.cardBody}>
-                    We sent a confirmation link to{' '}
-                    <Text style={styles.strong}>{awaitingConfirmation}</Text>.
-                    Open it and then sign in here.
-                  </Body>
-                </View>
-              )}
 
               {error && (
                 <ErrorNotice
@@ -374,19 +384,12 @@ export default function SignInScreen() {
 
               <View style={styles.providers}>
                 {/*
-                  Apple is present whenever Google is — App Store guideline 4.8
-                  requires the equivalent privacy-preserving option, and its
-                  absence is a guaranteed rejection rather than a risk.
+                  Temporarily removed — coming back before submission.
+                  App Store guideline 4.8 requires Apple sign-in wherever
+                  Google is offered, so this MUST return before this build
+                  goes to the App Store; its absence is fine for now only
+                  because nothing is being submitted yet.
                 */}
-                {appleSignInAvailable() && (
-                  <ProviderButton
-                    label="Apple"
-                    glyph=""
-                    tone="dark"
-                    disabled={busy}
-                    onPress={() => void attempt(signInWithApple)}
-                  />
-                )}
                 <ProviderButton
                   label="Google"
                   glyph="G"
@@ -411,21 +414,16 @@ export default function SignInScreen() {
             </Animated.View>
           )}
 
-          {/* ---- Skip ------------------------------------------------ */}
-          <View style={styles.skip}>
-            <Button
-              label="Not now"
-              variant="ghost"
-              onPress={() => {
-                void dismissAuthPrompt();
-                router.replace('/(tabs)');
-              }}
-            />
-            <Muted style={styles.skipNote}>
-              You can sign in later from More. Nothing you record before then
-              is lost — it&rsquo;s added to your account when you do.
-            </Muted>
-          </View>
+          {/*
+            There is deliberately no "Not now".
+
+            An account used to be optional, and this is where that choice was
+            offered. It is required now: records are stored against a user, and
+            the agreement to the Terms and Privacy Policy is recorded against
+            that same user, so there is no state the app can be in before one
+            exists. A skip button here would lead nowhere — the route gate in
+            app/_layout.tsx sends a signed-out session straight back.
+          */}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -545,13 +543,16 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   noticeCard: { backgroundColor: colors.amberTint, gap: spacing.sm },
-  infoCard: { backgroundColor: colors.tealTint, gap: spacing.sm },
+  successCard: { backgroundColor: colors.tealTint, gap: spacing.sm },
   cardBody: { lineHeight: 21 },
-  strong: { fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
 
   forgot: { alignSelf: 'center', paddingVertical: spacing.xs },
-  forgotWaiting: { color: colors.inkSoft },
-  forgotText: { fontSize: fontSize.sm, fontWeight: '700', color: colors.teal, fontFamily: fontFamily.bold },
+  forgotText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.teal,
+    fontFamily: fontFamily.bold,
+  },
 
   divider: {
     flexDirection: 'row',
@@ -602,7 +603,4 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   signupLink: { fontSize: fontSize.md, fontWeight: '800', color: colors.tealDeep, fontFamily: fontFamily.extrabold },
-
-  skip: { gap: spacing.xs, alignItems: 'center', marginTop: spacing.xs },
-  skipNote: { textAlign: 'center', lineHeight: 19 },
 });

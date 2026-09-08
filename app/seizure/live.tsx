@@ -36,10 +36,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { router, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Muted, Pill } from '@/components/ui';
+import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { ActionBar, SectionRule } from '@/components/form';
 import { Icon } from '@/components/Icon';
 import {
@@ -56,6 +57,45 @@ import { useSeizureTimer } from '@/hooks/useSeizureTimer';
 import { deleteVideoAssets, recordSeizureVideo } from '@/services/videoService';
 import * as seizureRepo from '@/db/seizureRepo';
 import { formatClock } from '@/utils/time';
+
+/**
+ * What Expo Router shows if THIS screen throws while rendering.
+ *
+ * Exporting this is the only way to get a boundary around a route — the router
+ * wraps a route in its `<Try>` only when the module exports `ErrorBoundary`.
+ * The root boundary in app/_layout.tsx would otherwise catch it, and it would
+ * be the wrong response: recovering there remounts the whole navigator while a
+ * seizure is still in progress.
+ *
+ * The wording is deliberately different from the generic fallback. "Your saved
+ * records are safe" is what someone wants to hear about a screen they were
+ * browsing; someone whose dog is mid-seizure needs to know that the timer is
+ * still running server-side of the UI — which it is. `createSeizure` inserts
+ * the row and stamps `start` on the FIRST tap, before this screen ever
+ * renders, and `end` is stamped when the seizure is ended. Nothing about the
+ * event depends on this component surviving.
+ *
+ * So the primary action is the one that finishes the recording rather than the
+ * one that retries the broken screen: the post screen reads the same draft and
+ * can end the seizure without the live timer.
+ */
+export function ErrorBoundary({ error, retry }: { error: Error; retry: () => void }) {
+  return (
+    <AppErrorBoundary
+      error={error}
+      retry={retry}
+      message={
+        'This seizure is still being recorded. It was saved the moment you ' +
+        'started it, and the time it started is correct — only this screen ' +
+        'stopped drawing.'
+      }
+      action={{
+        label: 'Go to the end-of-seizure screen',
+        onPress: () => router.replace('/seizure/post'),
+      }}
+    />
+  );
+}
 
 export default function LiveSeizureScreen() {
   const router = useRouter();

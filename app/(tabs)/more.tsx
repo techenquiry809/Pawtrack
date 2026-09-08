@@ -30,20 +30,21 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  Body, Button, Card, Disclaimer, Heading, Muted, NavRow, Pill, SectionTitle, Title,
+  ActionRow, Body, Button, Card, Disclaimer, Heading, Muted, NavRow, Pill,
+  SectionTitle, Title,
 } from '@/components/ui';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { pendingWriteCount, useAuthStore } from '@/store/authStore';
-import { syncNow } from '@/services/sync/worker';
-import { resetAuthPrompt } from '@/services/authPrompt';
 import { breedDisplay } from '@/db/dogRepo';
 import { DogAvatar } from '@/components/ProfileHeader';
 import { Icon } from '@/components/Icon';
+import { SignOutDialog } from '@/components/SignOutDialog';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import { DEFAULT_SETTINGS } from '@/types/domain';
+import { LEGAL_DOCUMENTS } from '@/constants/legal';
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
@@ -63,46 +64,19 @@ export default function MoreScreen() {
   const userEmail = useAuthStore((s) => s.user?.email ?? null);
   const [pending, setPending] = useState(0);
 
-  const signOut = useAuthStore((s) => s.signOut);
   const refreshDogs = useAppStore((s) => s.refreshDogs);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
-  const [signingOut, setSigningOut] = useState(false);
 
-  const refreshPending = useCallback(async () => {
-    setPending(await pendingWriteCount());
-  }, []);
-
-  const onSyncFirst = async () => {
-    setSigningOut(true);
-    try {
-      await syncNow('manual');
-      await refreshPending();
-    } finally {
-      setSigningOut(false);
-    }
-  };
-
-  const onSignOut = async () => {
-    setSigningOut(true);
-    try {
-      await signOut();
-      // Put the sign-in offer back on the table — the next person to pick up
-      // this phone may well be a different one.
-      await resetAuthPrompt();
-      await refreshDogs();
-      setConfirmSignOut(false);
-    } finally {
-      setSigningOut(false);
-    }
-  };
-
-  const accountLabel = authStatus === 'signed-in' ? 'Account' : 'Sign in';
+  /*
+   * Always 'Account'. There is no signed-out branch to write copy for — the
+   * route gate sends a session-less app to sign-in before this screen renders,
+   * so a "Sign in" row here would advertise a state the owner cannot be in.
+   */
+  const accountLabel = 'Account';
   const accountDetail =
-    authStatus === 'signed-in'
-      ? pending === 0
-        ? (userEmail ?? 'Backed up')
-        : `${pending} record${pending === 1 ? '' : 's'} waiting to back up`
-      : 'Back up your records and use them on another device';
+    pending === 0
+      ? (userEmail ?? 'Backed up')
+      : `${pending} record${pending === 1 ? '' : 's'} waiting to back up`;
 
   const dogId = dog?.id;
 
@@ -210,18 +184,35 @@ export default function MoreScreen() {
       {/* --- Account and sync --------------------------------------- */}
       {/*
         Placed after the dog's own settings, not before them. An account is
-        backup and a second device; it is not what this app is for, and putting
-        it at the top would imply the records need one to be safe. They do not.
+        required to use PawTrack at all now, but it is still not what the app
+        is FOR — the dog is. Putting it at the top would make the admin the
+        headline and the animal the footnote.
       */}
       <SectionTitle>Account</SectionTitle>
       <Card style={styles.flush}>
         <NavRow
-          icon="records"
+          icon="profile"
           label={accountLabel}
           detail={accountDetail}
           onPress={() => router.push('/account')}
-          last
         />
+        {/*
+          Sign out lives IN this card now, as its last row.
+
+          It used to be an outline Button in a card of its own — white on
+          white, held apart from its surface by a hairline and a shadow, and
+          floating between two groups it belonged to neither of. Grouping it
+          under Account is also what it is: the account section's other
+          action.
+        */}
+        {authStatus === 'signed-in' ? (
+          <ActionRow
+            label="Sign out"
+            detail="Your records stay on this phone."
+            onPress={() => setConfirmSignOut(true)}
+            last
+          />
+        ) : null}
       </Card>
 
       {/*
@@ -234,48 +225,23 @@ export default function MoreScreen() {
         exists to say how many — and to offer syncing them first, which is what
         the owner almost always actually wants.
       */}
-      {authStatus === 'signed-in' && (
-        <Card style={confirmSignOut ? styles.warnCard : undefined}>
-          {confirmSignOut ? (
-            <>
-              <Heading>Sign out?</Heading>
-              <Body style={styles.signOutBody}>
-                {pending === 0
-                  ? 'Everything is backed up. Your records stay on this phone and in your account.'
-                  : `${pending === 1 ? '1 record has' : `${pending} records have`} not been backed up yet. They stay on this phone and will upload next time you sign in.`}
-              </Body>
-              {pending > 0 && (
-                <Button
-                  label="Sync now first"
-                  onPress={() => void onSyncFirst()}
-                  loading={signingOut}
-                />
-              )}
-              <Button
-                label="Sign out"
-                variant="danger"
-                onPress={() => void onSignOut()}
-                disabled={signingOut}
-              />
-              <Button
-                label="Cancel"
-                variant="ghost"
-                onPress={() => setConfirmSignOut(false)}
-                disabled={signingOut}
-              />
-            </>
-          ) : (
-            <Button
-              label="Sign out"
-              variant="ghost"
-              onPress={() => {
-                void refreshPending();
-                setConfirmSignOut(true);
-              }}
-            />
-          )}
-        </Card>
-      )}
+      {/*
+        The question itself is a dialog, not a card that unfolds in this list.
+        It counts the outbox on open, so nothing here has to keep a number
+        fresh for it. See components/SignOutDialog.tsx.
+      */}
+      <SignOutDialog
+        visible={confirmSignOut}
+        onCancel={() => setConfirmSignOut(false)}
+        onSignedOut={async () => {
+          setConfirmSignOut(false);
+          // The route gate sends a signed-out session to sign-in on its own,
+          // because an account is required. This only clears the dog list so
+          // the screen does not paint the previous owner's data on the way
+          // out.
+          await refreshDogs();
+        }}
+      />
 
       {/* --- Dog switcher, only when it does something -------------- */}
       {dogs.length > 1 && (
@@ -386,18 +352,17 @@ export default function MoreScreen() {
       */}
       <SectionTitle>Your data</SectionTitle>
       <Card>
-        {authStatus === 'signed-in' ? (
-          <Body>
-            Your records are backed up to your account and appear on every
-            device you sign in on. Seizure videos are the exception — those
-            stay on the phone that filmed them and are never uploaded.
-          </Body>
-        ) : (
-          <Body>
-            Everything stays on this phone. Nothing is uploaded and nothing is
-            shared unless you export it yourself.
-          </Body>
-        )}
+        {/*
+          One branch, not two. There used to be a signed-out version of this
+          copy saying "everything stays on this phone, nothing is uploaded" —
+          which is now unreachable AND untrue, the worst pair for a card whose
+          whole job is helping someone judge what losing this phone costs.
+        */}
+        <Body>
+          Your records are backed up to your account and appear on every device
+          you sign in on. Seizure videos are the exception — those stay on the
+          phone that filmed them and are never uploaded.
+        </Body>
 
         {counts && (
           <Muted style={{ marginTop: spacing.sm }}>
@@ -407,12 +372,30 @@ export default function MoreScreen() {
         )}
 
         <Muted style={{ marginTop: spacing.sm }}>
-          {authStatus === 'signed-in'
-            ? pending === 0
-              ? 'Everything here has been backed up. Losing this phone would still lose its seizure videos, because those never leave the device.'
-              : `${pending === 1 ? '1 record has' : `${pending} records have`} not been backed up yet — they upload on the next sync.`
-            : 'Without an account there is no backup, so losing this phone loses these records.'}
+          {pending === 0
+            ? 'Everything here has been backed up. Losing this phone would still lose its seizure videos, because those never leave the device.'
+            : `${pending === 1 ? '1 record has' : `${pending} records have`} not been backed up yet — they upload on the next sync.`}
         </Muted>
+      </Card>
+
+      {/* --- About ---------------------------------------------------
+        The agreement an owner accepted at first run has to stay readable
+        afterwards. "What did I agree to?" is a fair question six months later,
+        and an agreement you can only see at the moment you accept it is one
+        nobody can go back and check.
+      */}
+      <SectionTitle>About</SectionTitle>
+      <Card style={styles.flush}>
+        {LEGAL_DOCUMENTS.map((doc, i) => (
+          <NavRow
+            key={doc.id}
+            icon="lock"
+            label={doc.title}
+            detail={`Last updated ${doc.updated}`}
+            onPress={() => router.push({ pathname: '/legal', params: { doc: doc.id } })}
+            last={i === LEGAL_DOCUMENTS.length - 1}
+          />
+        ))}
       </Card>
 
       <Disclaimer>
@@ -569,7 +552,5 @@ const styles = StyleSheet.create({
     borderRadius: radius.card,
   },
   /** Amber, not red: signing out is reversible and loses nothing. */
-  warnCard: { backgroundColor: colors.amberTint, gap: spacing.sm },
-  signOutBody: { lineHeight: 21 },
   resetLabel: { color: colors.tealDeep, fontWeight: '700', fontFamily: fontFamily.bold },
 });

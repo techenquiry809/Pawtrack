@@ -61,6 +61,23 @@ export default function DevicesScreen() {
 
   const [devices, setDevices] = useState<UserDevice[]>([]);
   const [loading, setLoading] = useState(true);
+  /**
+   * True ONLY while a pull-to-refresh gesture is being served.
+   *
+   * ── WHY THIS IS NOT `loading` ─────────────────────────────────────────
+   *
+   * It was, and it made the screen spin at you the moment you opened it: the
+   * automatic first load sets `loading`, the RefreshControl was bound to
+   * `loading`, so a control that exists to acknowledge a GESTURE was firing
+   * with no gesture behind it. Every visit began with a spinner sliding down
+   * from under the title and retracting a beat later.
+   *
+   * A refresh nobody asked for should be invisible. The list is either empty
+   * (and says so) or already showing the last known devices, and neither is
+   * improved by animating. So the automatic load runs silently in the
+   * background and only a real pull turns this on.
+   */
+  const [pulling, setPulling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmingOthers, setConfirmingOthers] = useState(false);
 
@@ -121,7 +138,15 @@ export default function DevicesScreen() {
         { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + spacing.xl },
       ]}
       refreshControl={
-        <RefreshControl refreshing={loading} onRefresh={() => void load()} />
+        <RefreshControl
+          refreshing={pulling}
+          onRefresh={() => {
+            setPulling(true);
+            // `finally`, not `then`: a failed listing must still release the
+            // spinner, or the gesture leaves it stuck open forever.
+            void load().finally(() => setPulling(false));
+          }}
+        />
       }
     >
       <BackButton />

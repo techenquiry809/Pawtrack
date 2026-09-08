@@ -17,54 +17,61 @@
  * on later in system settings.
  */
 
-import { useCallback, useState } from 'react';
-import { Alert, Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Linking, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import {
-  Button, Card, EmptyState, Heading, Muted, Pill, type PillTone,
+  Button, Card, EmptyState, Heading, Muted,
 } from '@/components/ui';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { Icon } from '@/components/Icon';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as reminders from '@/services/medicationReminders';
-import { localDayKey } from '@/utils/time';
+import { formatTimeOfDay } from '@/utils/time';
 import {
-  DOSE_STATUS_LABEL,
-  type DoseStatus,
-  type MedicationDose,
   type MedicationWithReminders,
 } from '@/types/domain';
 
-const DOSE_TONE: Record<DoseStatus, PillTone> = {
-  given: 'green',
-  late: 'amber',
-  missed: 'red',
-};
 
-export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: string }) {
+export function MedicationSection({
+  dogId,
+  dogName,
+  reloadToken = 0,
+}: {
+  dogId: string;
+  dogName: string;
+  /**
+   * Bump to force a reload.
+   *
+   * The list reloads on focus, which covers arriving at the tab — but not a
+   * dose answered by DosePrompt while this section is ALREADY focused and
+   * mounted. Without this, the owner answers "Given on time" in the dialog
+   * and the row underneath still offers them the three buttons.
+   */
+  reloadToken?: number;
+}) {
   const router = useRouter();
   const [meds, setMeds] = useState<MedicationWithReminders[]>([]);
-  const [doses, setDoses] = useState<MedicationDose[]>([]);
   const [permission, setPermission] = useState<reminders.PermissionOutcome>('undetermined');
   const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [m, d, p] = await Promise.all([
+      // Today's doses are no longer read here — they moved to the Check-in
+      // screen with the block that displayed them.
+      const [m, p] = await Promise.all([
         medicationRepo.listMedications(dogId),
-        medicationRepo.listDosesForDate(dogId, localDayKey()),
         reminders.getPermissionStatus(),
       ]);
       setMeds(m);
-      setDoses(d);
       setPermission(p);
     } catch (e) {
       console.error('[medication] load failed', e);
     } finally {
       setLoaded(true);
     }
-  }, [dogId]);
+  }, [dogId, reloadToken]);
 
   useFocusEffect(
     useCallback(() => {
@@ -77,6 +84,13 @@ export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: 
       };
     }, [load]),
   );
+
+  // `load` is rebuilt when reloadToken changes, but useFocusEffect only re-runs
+  // its callback on focus — so a token bump while already focused needs its own
+  // effect to actually fetch.
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const anyReminderOn = meds.some((m) => m.reminders.some((r) => r.enabled));
 
@@ -111,23 +125,6 @@ export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: 
     await load();
   };
 
-  const onRecordDose = async (
-    med: MedicationWithReminders,
-    status: DoseStatus,
-    scheduledHHMM: string,
-  ) => {
-    try {
-      await medicationRepo.recordDose({
-        medicationId: med.id,
-        dogId,
-        status,
-        scheduledHHMM,
-      });
-      await load();
-    } catch (e) {
-      console.error('[medication] record dose failed', e);
-    }
-  };
 
   if (!loaded) {
     return (
@@ -170,10 +167,8 @@ export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: 
           <MedicationCard
             key={med.id}
             med={med}
-            doses={doses.filter((d) => d.medicationId === med.id)}
             onEdit={() => router.push(`/medication-edit?id=${med.id}`)}
             onToggleReminder={(id, next) => void onToggleReminder(med, id, next)}
-            onRecordDose={(status, slot) => void onRecordDose(med, status, slot)}
           />
         ))
       )}
@@ -197,24 +192,15 @@ export function MedicationSection({ dogId, dogName }: { dogId: string; dogName: 
 
 function MedicationCard({
   med,
-  doses,
   onEdit,
   onToggleReminder,
-  onRecordDose,
 }: {
   med: MedicationWithReminders;
-  doses: MedicationDose[];
   onEdit: () => void;
   onToggleReminder: (reminderId: string, next: boolean) => void;
-  onRecordDose: (status: DoseStatus, scheduledHHMM: string) => void;
 }) {
   const amount = [med.dose, med.unit].filter((x) => x.trim()).join('');
 
-  // A dose slot per reminder time, plus one unscheduled slot when there are no
-  // reminders at all — an owner who does not want alerts still logs doses.
-  const slots = med.reminders.length > 0
-    ? med.reminders.map((r) => r.timeHHMM)
-    : [''];
 
   return (
     <Card>
@@ -238,14 +224,14 @@ function MedicationCard({
         <View style={styles.remindersBlock}>
           {med.reminders.map((r) => (
             <View key={r.id} style={styles.reminderRow}>
-              <Text style={styles.reminderTime}>{r.timeHHMM}</Text>
+              <Text style={styles.reminderTime}>{formatTimeOfDay(r.timeHHMM)}</Text>
               <View style={styles.flexOne}>
                 <Muted>{r.enabled ? 'Reminder on, daily' : 'Reminder off'}</Muted>
               </View>
               <Switch
                 value={r.enabled}
                 onValueChange={(next) => onToggleReminder(r.id, next)}
-                accessibilityLabel={`Daily reminder at ${r.timeHHMM}`}
+                accessibilityLabel={`Daily reminder at ${formatTimeOfDay(r.timeHHMM)}`}
                 trackColor={{ true: colors.teal, false: colors.line }}
               />
             </View>
@@ -253,70 +239,22 @@ function MedicationCard({
         </View>
       )}
 
-      {/* --- Today's doses ------------------------------------------ */}
-      <View style={styles.dosesBlock}>
-        <Text style={styles.dosesLabel}>TODAY</Text>
-        {slots.map((slot) => {
-          const recorded = doses.find((d) => d.scheduledHHMM === slot);
-          return (
-            <View key={slot || 'unscheduled'} style={styles.doseRow}>
-              <Text style={styles.doseSlot}>{slot || 'Dose'}</Text>
-              {recorded ? (
-                <View style={styles.doseRecorded}>
-                  <Pill label={DOSE_STATUS_LABEL[recorded.status]} tone={DOSE_TONE[recorded.status]} />
-                  <Pressable
-                    onPress={() =>
-                      Alert.alert(
-                        'Change this record?',
-                        'Pick what actually happened.',
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          { text: 'Given on time', onPress: () => onRecordDose('given', slot) },
-                          { text: 'Given late', onPress: () => onRecordDose('late', slot) },
-                          { text: 'Not given', onPress: () => onRecordDose('missed', slot) },
-                        ],
-                      )
-                    }
-                    accessibilityRole="button"
-                    accessibilityLabel={`Change the record for ${slot || 'this dose'}`}
-                    style={({ pressed }) => [styles.changeBtn, pressed && styles.pressed]}
-                  >
-                    <Muted style={styles.changeLabel}>Change</Muted>
-                  </Pressable>
-                </View>
-              ) : (
-                <View style={styles.doseButtons}>
-                  <DoseButton label="Given" onPress={() => onRecordDose('given', slot)} />
-                  <DoseButton label="Late" onPress={() => onRecordDose('late', slot)} />
-                  <DoseButton label="Missed" onPress={() => onRecordDose('missed', slot)} />
-                </View>
-              )}
-            </View>
-          );
-        })}
-        {doses.some((d) => d.status === 'missed') && (
-          <Muted style={styles.missedNote}>
-            {/* The ONLY acceptable guidance for a missed dose. */}
-            Follow your veterinarian&apos;s instructions about a missed dose.
-          </Muted>
-        )}
-      </View>
+      {/*
+        Today's doses are NOT here any more.
+
+        They were a TODAY block inside every medication card, so a dog on
+        three drugs got three separate lists, none of them in time order, all
+        behind the Medication segment. They now live as one chronological list
+        on the Check-in screen, which is where the daily ritual happens —
+        see components/TodaysDoses.tsx.
+
+        This card keeps what it is for: the prescription as written, and the
+        reminders with their toggles.
+      */}
     </Card>
   );
 }
 
-function DoseButton({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`Record dose as ${label}`}
-      style={({ pressed }) => [styles.doseBtn, pressed && styles.pressed]}
-    >
-      <Text style={styles.doseBtnLabel}>{label}</Text>
-    </Pressable>
-  );
-}
 
 const styles = StyleSheet.create({
   flexOne: { flex: 1 },

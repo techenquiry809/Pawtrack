@@ -1,103 +1,93 @@
 /**
- * Claiming the records that were already on this phone.
+ * Adopting records that were written before accounts were required.
  *
- * ── WHY THIS EXISTS ───────────────────────────────────────────────────
+ * ── WHAT THIS IS NOW, AND WHAT IT USED TO BE ──────────────────────────
  *
- * Everyone using the app today has records with `user_id IS NULL`, written
- * before accounts existed. Reads are fenced by owner (src/db/scope.ts), so the
- * moment someone signs in, those rows stop matching and their dog's entire
- * history appears to vanish. Skipping this step is not a missing feature; it
- * is data loss as far as the owner is concerned.
+ * It used to be a decision. The app could be used with no account at all, so
+ * signing in could find a phone holding one dog's history and an account
+ * holding another's, and the owner had to be asked which to keep. That screen,
+ * its "keep only what's in my account" branch, and the banner that announced a
+ * silent merge are all gone, because the situation they existed for cannot
+ * happen any more: an account is required before a single record can be
+ * written.
  *
- * ── WHY IT ASKS FIRST ─────────────────────────────────────────────────
+ * What remains is a one-way UPGRADE PATH. Anyone who used the app before this
+ * change has rows on their phone with `user_id IS NULL`, and reads are fenced
+ * by owner (src/db/scope.ts) — so the moment sign-in became compulsory, those
+ * rows stopped matching any query and their dog's entire history would appear
+ * to have been deleted. It has not been; it is simply unowned. This hands it
+ * to the first account that signs in on that phone.
  *
- * If someone signs into an account that already has a different dog, silently
- * merging two animals' seizure histories is unrecoverable. There is no undo
- * that can separate them again afterwards, and a vet report built from the
- * merge would be actively misleading.
+ * ── WHY THIS IS SAFE TO DO SILENTLY NOW, HAVING NOT BEEN BEFORE ───────
  *
- * So the decision is put to the owner, with both dogs named, and the
- * destructive branch is behind a second confirmation.
+ * The old flow asked first because a merge could combine two ANIMALS'
+ * histories irreversibly. That risk came from the account already holding
+ * dogs of its own while the phone held different ones.
+ *
+ * It cannot arise here. These rows predate the requirement to sign in, so they
+ * were written by whoever was holding this phone, and the account signing in
+ * on that same phone is that person. There is no second party to confuse them
+ * with, and asking would be a question about a situation that no longer
+ * exists.
+ *
+ * ── WHEN IT STOPS RUNNING ─────────────────────────────────────────────
+ *
+ * On its own, and permanently, once there is nothing left unowned — which for
+ * every new install is from the very first launch. The count query below is
+ * indexed and returns zero immediately in that case.
  */
 
 import { getDb } from '@/db/client';
 import { enqueueMany } from '@/db/outbox';
 import { SYNC_TABLES, q } from '@/db/syncSchema';
-import { getSupabase } from '@/services/supabase';
 
-export type ClaimSituation = {
-  /** Dogs on this phone that belong to no account yet. */
-  unclaimed: { id: string; name: string }[];
-  /** Dogs already in the account being signed into. */
-  inAccount: { id: string; name: string }[];
-  /** Total unclaimed rows across every table — what the owner stands to lose. */
-  unclaimedRowCount: number;
-  /**
-   * True when the owner must be asked. Claiming silently is only safe when
-   * there is nothing to merge INTO.
-   */
-  needsDecision: boolean;
+export type AdoptionResult = {
+  /** Rows handed to the account across every table. */
+  rows: number;
+  /** Names of the dogs those rows belong to. For logging, not for a prompt. */
+  dogs: string[];
 };
 
 /**
- * Work out what the owner is about to be asked, without changing anything.
+ * Is there anything left over from before accounts were required?
  *
- * Call this after a successful sign-in and before the first sync.
+ * Split out so the common case — a normal install, nothing unowned — costs one
+ * cheap count rather than opening a transaction over nine tables on every
+ * single sign-in.
  */
-export async function describeClaim(): Promise<ClaimSituation> {
+export async function hasOrphanedLocalData(): Promise<boolean> {
   const db = await getDb();
-
-  const unclaimed = await db.getAllAsync<{ id: string; name: string }>(
-    `SELECT id, name FROM dogs
-      WHERE user_id IS NULL AND deleted_at IS NULL ORDER BY created_at ASC`,
-  );
-
-  let unclaimedRowCount = 0;
   for (const spec of SYNC_TABLES) {
-    const row = await db.getFirstAsync<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM ${q(spec.table)}
-        WHERE user_id IS NULL AND deleted_at IS NULL`,
+    // `SELECT 1 ... LIMIT 1`, not COUNT(*). This runs on every launch, and the
+    // question is "is there at least one", not "how many" — COUNT would scan
+    // every row of every table to answer something the first hit settles.
+    const row = await db.getFirstAsync<{ one: number }>(
+      `SELECT 1 AS one FROM ${q(spec.table)} WHERE user_id IS NULL LIMIT 1`,
     );
-    unclaimedRowCount += row?.n ?? 0;
+    if (row) return true;
   }
-
-  // The account's existing dogs come from the server, not from local SQLite:
-  // this device may never have seen them, and that is exactly the case the
-  // prompt has to describe.
-  const inAccount: { id: string; name: string }[] = [];
-  const supabase = getSupabase();
-  if (supabase) {
-    const { data } = await supabase
-      .from('dogs')
-      .select('id, name')
-      .is('deleted_at', null)
-      .order('created_at', { ascending: true });
-    for (const row of data ?? []) {
-      inAccount.push({ id: row.id as string, name: row.name as string });
-    }
-  }
-
-  return {
-    unclaimed,
-    inAccount,
-    unclaimedRowCount,
-    // Nothing to claim, or an empty account to claim into: no question worth
-    // asking. Only a genuine merge of two populated sets needs a decision.
-    needsDecision: unclaimed.length > 0 && inAccount.length > 0,
-  };
+  return false;
 }
 
 /**
- * Hand every unclaimed row to this account and queue it all for push.
+ * Hand every unowned row to this account and queue it all for push.
  *
- * One transaction. A half-claimed database — the dog assigned but its seizures
- * still ownerless — would show the owner a dog with no history, which is a
- * worse state than either end of the operation.
+ * One transaction. A half-adopted database — the dog assigned but its seizures
+ * still unowned — would show the owner a dog with no history, which is a worse
+ * state than either end of the operation.
  */
-export async function claimLocalData(userId: string): Promise<number> {
+export async function adoptOrphanedLocalData(
+  userId: string,
+): Promise<AdoptionResult> {
   const db = await getDb();
   const now = Date.now();
   let claimed = 0;
+
+  // Read before the UPDATE, while `user_id IS NULL` still selects them.
+  const dogs = await db.getAllAsync<{ name: string }>(
+    `SELECT name FROM dogs WHERE user_id IS NULL AND deleted_at IS NULL
+      ORDER BY created_at ASC`,
+  );
 
   await db.withTransactionAsync(async () => {
     for (const spec of SYNC_TABLES) {
@@ -114,78 +104,22 @@ export async function claimLocalData(userId: string): Promise<number> {
         [userId, now],
       );
 
-      await enqueueMany(db, spec.table, rows.map((r) => r.id), 'upsert', now);
+      // The owner is passed EXPLICITLY rather than left to enqueue's default.
+      // These entries are being handed to a specific account in the same
+      // transaction that assigns the rows to it, and that account is the one
+      // named here — not whatever a module-level store happens to hold by the
+      // time the queue drains. See migration 13.
+      await enqueueMany(db, spec.table, rows.map((r) => r.id), 'upsert', userId, now);
       claimed += rows.length;
     }
   });
 
-  console.log(`[sync] claimed ${claimed} local rows for ${userId}`);
-  return claimed;
-}
-
-/**
- * The destructive branch: keep only what is in the account.
- *
- * ── WHAT THIS ACTUALLY DOES, AND WHY IT IS A HARD DELETE ──────────────
- *
- * These rows have never been on any server. They have no id anywhere else, no
- * tombstone would ever be delivered to anyone, and nothing can conflict with
- * them. A tombstone here would be a delete instruction addressed to a row no
- * other device has ever heard of — so the rows are simply removed.
- *
- * Video FILES are returned rather than deleted, so the caller can remove them
- * from disk. They are the one thing here that exists nowhere else.
- *
- * The UI must put a second confirmation in front of this.
- */
-export async function discardUnclaimedData(): Promise<{
-  deletedRows: number;
-  orphanedFiles: { fileUri: string; thumbUri: string }[];
-}> {
-  const db = await getDb();
-  let deletedRows = 0;
-
-  const orphanedFiles = await db.getAllAsync<{
-    file_uri: string;
-    thumb_uri: string;
-  }>(
-    `SELECT f.file_uri, f.thumb_uri
-       FROM video_files f
-       JOIN videos v ON v.id = f.video_id
-      WHERE v.user_id IS NULL`,
-  );
-
-  await db.withTransactionAsync(async () => {
-    // Children before parents: these are real DELETEs, so the foreign keys are
-    // live and would cascade unpredictably if a parent went first.
-    for (const spec of [...SYNC_TABLES].reverse()) {
-      const result = await db.runAsync(
-        `DELETE FROM ${q(spec.table)} WHERE user_id IS NULL`,
-      );
-      deletedRows += result.changes ?? 0;
-    }
-
-    // Any queued intent for those rows is meaningless now.
-    await db.runAsync(
-      `DELETE FROM outbox WHERE row_id NOT IN (
-         SELECT id FROM dogs UNION SELECT id FROM seizures
-         UNION SELECT id FROM videos UNION SELECT id FROM seizure_edits
-         UNION SELECT id FROM medications UNION SELECT id FROM medication_reminders
-         UNION SELECT id FROM medication_doses UNION SELECT id FROM daily_checkins
-         UNION SELECT id FROM meals
-       )`,
-    );
-
-    await db.runAsync(
-      `DELETE FROM video_files WHERE video_id NOT IN (SELECT id FROM videos)`,
-    );
-  });
-
-  return {
-    deletedRows,
-    orphanedFiles: orphanedFiles.map((f) => ({
-      fileUri: f.file_uri,
-      thumbUri: f.thumb_uri ?? '',
-    })),
-  };
+  if (claimed > 0) {
+    // The account id is deliberately NOT logged. This line ships in release
+    // builds, and the device log is readable over adb / Console.app by anyone
+    // with the phone — putting a stable identifier for the person who owns
+    // these veterinary records into it buys nothing a count does not.
+    console.log(`[sync] adopted ${claimed} pre-account rows`);
+  }
+  return { rows: claimed, dogs: dogs.map((d) => d.name) };
 }

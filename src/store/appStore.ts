@@ -29,6 +29,25 @@ type AppState = {
 
   hydrate: () => Promise<void>;
   refreshDogs: () => Promise<void>;
+  /**
+   * Re-read everything for a DIFFERENT owner, after the session changed.
+   *
+   * ── WHY CLEARING FIRST IS THE POINT ───────────────────────────────────
+   *
+   * This store caches `dogs` and `activeDogId` in memory, and nothing used to
+   * re-read them when the account changed. Repository reads are fenced by
+   * ownerScope(), but a fence on the QUERY does nothing for rows already
+   * sitting in the store: sign out of A and into B on the same phone and the
+   * Home screen kept rendering A's dog — name, breed, photo — until some
+   * unrelated screen happened to call refreshDogs(). The route gate read the
+   * same stale `dogs.length`, so a brand-new account skipped onboarding and
+   * landed on Home showing the previous person's dog.
+   *
+   * So the cached values are dropped SYNCHRONOUSLY first and re-read after.
+   * A frame of "no dog" is the correct thing to show while we find out; a
+   * frame of someone else's dog is not.
+   */
+  resetForAccountChange: () => Promise<void>;
   setActiveDog: (dogId: string) => Promise<void>;
   updateSettings: (patch: Partial<Settings>) => Promise<void>;
 };
@@ -77,6 +96,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         : (dogs[0]?.id ?? null);
 
     set({ dogs, activeDogId, settings, hydrated: true });
+  },
+
+  resetForAccountChange: async () => {
+    set({ dogs: [], activeDogId: null, hydrated: false });
+    await get().hydrate();
   },
 
   refreshDogs: async () => {

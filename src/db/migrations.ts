@@ -779,6 +779,180 @@ const migrations: Migration[] = [
       );
     },
   },
+
+  {
+    version: 13,
+    name: 'outbox entries remember which account queued them',
+    up: async (db) => {
+      /**
+       * WHICH ACCOUNT THIS QUEUED WRITE BELONGS TO.
+       *
+       * ── THE BUG THIS CLOSES ───────────────────────────────────────────
+       *
+       * The outbox had no owner column, and `peek()` drained it with a bare
+       * `SELECT * FROM outbox ORDER BY id`. One phone can hold rows for more
+       * than one account over its life (src/db/scope.ts says so explicitly),
+       * and sign-out deliberately does NOT block on an undrained queue — so
+       * this sequence was reachable with no glitch required:
+       *
+       *   1. signed in as A, edit a seizure   -> outbox entry, row.user_id = A
+       *   2. push fails, or the owner signs out before the next sync
+       *   3. a different person signs in as B on the same phone
+       *   4. syncNow('sign-in') drains the queue, reads A's row, and pushes it
+       *
+       * The push deliberately STRIPS user_id and lets the server stamp
+       * auth.uid() (see PUSH_EXCLUDED_COLUMNS) — which is right for every
+       * other purpose and is exactly what makes this land in B's account.
+       * RLS cannot catch it: the write is a correctly-authenticated write by
+       * B, of a row B was never supposed to have. One dog's seizure history
+       * ends up in another household's account.
+       *
+       * NULL is a real, distinct value here and not "unknown": it means the
+       * entry was queued while signed out, so it belongs to NO account yet.
+       * Those must never be pushed on someone's session — they become
+       * pushable by being CLAIMED, which sets this column. See
+       * src/services/sync/claim.ts.
+       *
+       * ── BACKFILL ──────────────────────────────────────────────────────
+       *
+       * Taken from the referenced row's own user_id rather than from the
+       * session, because the session at migration time is not necessarily the
+       * account that queued the entry — assuming it is would recreate the very
+       * bug this column exists to prevent. An entry whose row has since been
+       * hard-deleted gets no owner and is dropped: it has nothing left to
+       * push, and `pushOnce` already discards queued-but-gone entries.
+       */
+      await db.execAsync('ALTER TABLE outbox ADD COLUMN user_id TEXT;');
+
+      for (const table of [
+        'dogs', 'seizures', 'medications', 'daily_checkins', 'meals',
+        'videos', 'seizure_edits', 'medication_reminders', 'medication_doses',
+      ]) {
+        await db.runAsync(
+          `UPDATE outbox
+              SET user_id = (SELECT t.user_id FROM "${table}" t WHERE t.id = outbox.row_id)
+            WHERE table_name = ?`,
+          [table],
+        );
+      }
+
+      // Drained by id, and now also fenced by owner on every read.
+      await db.execAsync(
+        'CREATE INDEX IF NOT EXISTS idx_outbox_owner ON outbox(user_id, id);',
+      );
+    },
+  },
+
+  {
+    version: 14,
+    name: 'consent belongs to the account, not to the device',
+    up: async (db) => {
+      /**
+       * REMOVE THE DEVICE-LEVEL CONSENT RECORD.
+       *
+       * ── WHY IT IS GONE ────────────────────────────────────────────────
+       *
+       * Agreement to the Terms and Privacy Policy was recorded here, against
+       * the DEVICE, because the app could be used with no account. An account
+       * is now required before anything else happens, so the record moved to
+       * `public.profiles` where it belongs to a person rather than a phone —
+       * see supabase/migrations/20260906000100_profile_consent.sql.
+       *
+       * Leaving these keys behind would be worse than untidy. They are a
+       * second, stale answer to "has this been agreed to?", sitting in the
+       * table the app still reads for other things, with nothing to say which
+       * of the two wins. The next person to look would reasonably use them.
+       *
+       * ── WHAT THIS COSTS, AND WHY IT IS CORRECT ANYWAY ─────────────────
+       *
+       * Anyone who agreed on the old device-level screen is asked once more,
+       * on their first sign-in after updating. That is not a regression: the
+       * old record was anonymous, so there is no honest way to attribute it to
+       * the account they are about to create, and claiming otherwise would put
+       * a name against an agreement that name never gave.
+       *
+       * The keys are deleted rather than blanked. Nothing reads them any more,
+       * and an empty string would leave the same ambiguity in a quieter form.
+       */
+      await db.runAsync(
+        `DELETE FROM sync_state
+          WHERE key IN ('consent_terms_version', 'consent_privacy_version',
+                        'consent_accepted_at')`,
+      );
+
+      /**
+       * The sign-in prompt's "not now" is gone too.
+       *
+       * That key recorded that someone had waved away the offer of an account
+       * — a decision that no longer exists, because signing in is now the
+       * first thing the app does. See the removal of services/authPrompt.ts.
+       */
+      await db.runAsync(
+        `DELETE FROM sync_state WHERE key = 'auth_prompt_dismissed'`,
+      );
+    },
+  },
+
+  {
+    version: 15,
+    name: 'sync cursors belong to an account, not just to a table',
+    up: async (db) => {
+      /**
+       * A CURSOR WITHOUT AN OWNER IS SILENT DATA LOSS.
+       *
+       * ── THE BUG ───────────────────────────────────────────────────────
+       *
+       * `sync_cursors` was keyed on `table_name` alone, and `sync_seq` comes
+       * from ONE GLOBAL sequence shared by every account — see
+       * `sync_seq_global` in supabase/migrations/20260828000100_core_schema.sql.
+       *
+       * So the cursor is a position in a stream that everybody writes into.
+       * Account A syncs on this phone and leaves the seizures cursor at seq
+       * 5000. A signs out, B signs in, and B's pull asks the server for
+       * `sync_seq > 5000` — skipping every row B wrote before that point,
+       * which is most of B's history if B has been using another phone.
+       *
+       * Nothing errors. Nothing retries. The pull reports success and B is
+       * shown a records list that is quietly missing entries, on an app whose
+       * entire purpose is that the record is complete. That is the worst
+       * failure mode this codebase has, because the owner cannot see it.
+       *
+       * ── THE FIX ───────────────────────────────────────────────────────
+       *
+       * The primary key becomes (user_id, table_name). An account that has
+       * never pulled on this device has no row, `getCursor` returns 0, and it
+       * reads the server's history from the beginning — which is exactly
+       * right. Two accounts on one phone now keep two independent positions
+       * instead of trampling one.
+       *
+       * ── WHY EVERY EXISTING ROW IS DISCARDED ───────────────────────────
+       *
+       * The old rows record a position but not whose it is, and there is no
+       * honest way to recover that: the device may have been used by one
+       * account or by three. Attributing them to whoever signs in next is the
+       * same guess that caused the bug.
+       *
+       * So they go. The cost is one full re-pull per account after upgrading;
+       * `applyRow` is an upsert keyed on the row id, so re-reading history is
+       * idempotent and changes nothing except the time it takes. Paying that
+       * once is the correct trade against any chance of a missing seizure.
+       *
+       * The table is REBUILT rather than altered because SQLite cannot add a
+       * column to a primary key in place.
+       */
+      await db.execAsync(`
+        DROP TABLE IF EXISTS sync_cursors;
+
+        CREATE TABLE sync_cursors (
+          user_id        TEXT    NOT NULL,
+          table_name     TEXT    NOT NULL,
+          last_seen_seq  INTEGER NOT NULL DEFAULT 0,
+          last_pulled_at INTEGER,
+          PRIMARY KEY (user_id, table_name)
+        );
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(db: SQLiteDatabase): Promise<void> {

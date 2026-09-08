@@ -254,6 +254,11 @@ export async function createSeizure(input: NewSeizureInput): Promise<string> {
     ? Math.round((input.start - prev.start) / 1000)
     : null;
 
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
   await db.runAsync(
     `INSERT INTO seizures (
@@ -265,7 +270,7 @@ export async function createSeizure(input: NewSeizureInput): Promise<string> {
       created_at, updated_at
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'complete',?,?,?,?,?)`,
     [
-      id, newRowOwner(), input.dogId, input.start, input.end, input.durationSec,
+      id, rowOwner, input.dogId, input.start, input.end, input.durationSec,
       input.timingConfidence, toSqlBool(input.retrospective),
       toSqlJson(input.preIctalObs), input.preIctalNote,
       toSqlJson(input.ictalObs), input.awareness,
@@ -279,7 +284,7 @@ export async function createSeizure(input: NewSeizureInput): Promise<string> {
       now, now,
     ],
   );
-    await enqueue(db, 'seizures', id, 'upsert', now);
+    await enqueue(db, 'seizures', id, 'upsert', rowOwner, now);
   });
   return id;
 }
@@ -320,6 +325,12 @@ export async function openSeizure(input: OpenSeizureInput): Promise<string> {
   // scheduling rules in src/services/sync/worker.ts. The row exists locally
   // from this instant, which is the durability guarantee that matters; getting
   // it to the server can wait for the recovery screen.
+
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `INSERT INTO seizures (
@@ -327,11 +338,11 @@ export async function openSeizure(input: OpenSeizureInput): Promise<string> {
         status, duration_confidence, last_touched_at, created_at, updated_at
       ) VALUES (?,?,?,?,?,?,'exact','in_progress','unreliable',?,?,?)`,
       [
-        id, newRowOwner(), input.dogId, input.startedAtUtc, input.tzOffsetMin,
+        id, rowOwner, input.dogId, input.startedAtUtc, input.tzOffsetMin,
         toSqlBool(input.retrospective ?? false), now, now, now,
       ],
     );
-    await enqueue(db, 'seizures', id, 'upsert', now);
+    await enqueue(db, 'seizures', id, 'upsert', rowOwner, now);
   });
   return id;
 }
@@ -404,13 +415,18 @@ export async function patchSeizure(
   // sends whatever the row currently says, and a no-op push costs far less
   // than reasoning about whether a guard rejected a write we still needed to
   // replicate.
+  const owner = ownerScope();
+  // Fenced to the signed-in account as well as the id. The status guard below
+  // already stops a late write reaching a finished row; this stops one reaching
+  // ANOTHER ACCOUNT's row. See dogRepo.updateDog and src/db/scope.ts.
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE seizures SET ${sets.join(', ')}
-        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
-      values,
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL
+          AND ${owner.sql}`,
+      [...values, ...owner.params],
     );
-    await enqueue(db, 'seizures', seizureId, 'upsert', now);
+    await enqueue(db, 'seizures', seizureId, 'upsert', newRowOwner(), now);
   });
 }
 
@@ -445,19 +461,23 @@ export async function finalizeSeizure(
 
   const recoverySec = await computeRecoverySec(seizureId);
 
+  // Fenced to the signed-in account as well as the id — see patchSeizure.
+  const finalizeOwner = ownerScope();
+
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE seizures
           SET duration_sec = ?, duration_confidence = ?, recovery_sec = ?,
               time_since_prev_sec = ?, status = 'complete',
               last_touched_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL
+          AND ${finalizeOwner.sql}`,
       [
         value.durationSeconds ?? 0, value.durationConfidence, recoverySec,
-        timeSincePrevSec, now, now, seizureId,
+        timeSincePrevSec, now, now, seizureId, ...finalizeOwner.params,
       ],
     );
-    await enqueue(db, 'seizures', seizureId, 'upsert', now);
+    await enqueue(db, 'seizures', seizureId, 'upsert', newRowOwner(), now);
   });
 }
 
@@ -530,19 +550,23 @@ export async function salvageSeizure(seizure: UnfinishedSeizure): Promise<void> 
     ? Math.round((seizure.startedAtUtc - prev.start) / 1000)
     : null;
 
+  // Fenced to the signed-in account as well as the id — see patchSeizure.
+  const salvageOwner = ownerScope();
+
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE seizures
           SET duration_sec = ?, duration_confidence = ?, end = ?,
               time_since_prev_sec = ?, status = 'complete',
               last_touched_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL
+          AND ${salvageOwner.sql}`,
       [
         durationSeconds ?? 0, confidence, seizure.lastTouchedAt,
-        timeSincePrevSec, now, now, seizure.id,
+        timeSincePrevSec, now, now, seizure.id, ...salvageOwner.params,
       ],
     );
-    await enqueue(db, 'seizures', seizure.id, 'upsert', now);
+    await enqueue(db, 'seizures', seizure.id, 'upsert', newRowOwner(), now);
   });
 }
 
@@ -571,6 +595,11 @@ export async function discardSeizure(seizureId: string): Promise<void> {
   const db = await getDb();
   const now = Date.now();
 
+  // Fenced to the signed-in account as well as the id — see patchSeizure. This
+  // one is the most destructive statement in the file, so it is the last place
+  // that should trust the caller to have checked.
+  const discardOwner = ownerScope();
+
   // NOT a tombstone. 'abandoned' and deleted_at answer different questions:
   // the first says the owner threw this capture away, the second says the row
   // should stop existing everywhere. An abandoned row is still evidence when
@@ -579,10 +608,11 @@ export async function discardSeizure(seizureId: string): Promise<void> {
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE seizures SET status = 'abandoned', last_touched_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL`,
-      [now, now, seizureId],
+        WHERE id = ? AND status = 'in_progress' AND deleted_at IS NULL
+          AND ${discardOwner.sql}`,
+      [now, now, seizureId, ...discardOwner.params],
     );
-    await enqueue(db, 'seizures', seizureId, 'upsert', now);
+    await enqueue(db, 'seizures', seizureId, 'upsert', newRowOwner(), now);
   });
 }
 
@@ -641,22 +671,30 @@ export async function updateSeizure(
   );
   const editId = uid();
 
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
+  // Fenced to the signed-in account as well as the id — see patchSeizure.
+  const editOwner = ownerScope();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      `UPDATE seizures SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
-      values,
+      `UPDATE seizures SET ${sets.join(', ')}
+        WHERE id = ? AND deleted_at IS NULL AND ${editOwner.sql}`,
+      [...values, ...editOwner.params],
     );
     await db.runAsync(
       `INSERT INTO seizure_edits
          (id, user_id, dog_id, seizure_id, edited_at, summary, updated_at)
        VALUES (?,?,?,?,?,?,?)`,
       [
-        editId, parent?.user_id ?? newRowOwner(), parent?.dog_id ?? null,
+        editId, parent?.user_id ?? rowOwner, parent?.dog_id ?? null,
         id, now, editSummary, now,
       ],
     );
-    await enqueue(db, 'seizures', id, 'upsert', now);
-    await enqueue(db, 'seizure_edits', editId, 'upsert', now);
+    await enqueue(db, 'seizures', id, 'upsert', rowOwner, now);
+    await enqueue(db, 'seizure_edits', editId, 'upsert', rowOwner, now);
   });
 }
 

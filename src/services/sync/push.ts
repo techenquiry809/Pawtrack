@@ -82,9 +82,19 @@ export async function pushOnce(): Promise<PushResult> {
   const { data: sessionData } = await supabase.auth.getSession();
   if (!sessionData.session) return { pushed: 0, remaining: 0, remapped: 0 };
 
+  // The account this request will authenticate as, and therefore the only
+  // account whose queued writes may be drained on it. The server stamps
+  // auth.uid() on every row it accepts, so pushing an entry queued by a
+  // different account on this session would file that account's records into
+  // this one — a leak RLS cannot see, because the write is legitimately
+  // authenticated. See migration 13 and src/db/outbox.ts.
+  const owner = sessionData.session.user.id;
+
   const db = await getDb();
-  const batch = await outbox.peek(db, BATCH);
-  if (batch.length === 0) return { pushed: 0, remaining: 0, remapped: 0 };
+  const batch = await outbox.peek(db, owner, BATCH);
+  if (batch.length === 0) {
+    return { pushed: 0, remaining: await outbox.pendingCount(db, owner), remapped: 0 };
+  }
 
   const byTable = new Map<string, typeof batch>();
   for (const entry of batch) {
@@ -149,7 +159,7 @@ export async function pushOnce(): Promise<PushResult> {
     await outbox.clear(db, settled);
     return {
       pushed: 0,
-      remaining: await outbox.pendingCount(db),
+      remaining: await outbox.pendingCount(db, owner),
       remapped: 0,
     };
   }
@@ -174,7 +184,7 @@ export async function pushOnce(): Promise<PushResult> {
 
   return {
     pushed: sentEntryIds.length,
-    remaining: await outbox.pendingCount(db),
+    remaining: await outbox.pendingCount(db, owner),
     remapped: remaps.length,
   };
 }

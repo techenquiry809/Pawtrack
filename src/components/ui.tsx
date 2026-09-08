@@ -496,6 +496,65 @@ export function NavRow({
 }
 
 /* ------------------------------------------------------------------ */
+/* ActionRow                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A row in a card that DOES something, rather than going somewhere.
+ *
+ * ── WHY NOT NavRow, AND WHY NOT A Button ──────────────────────────────
+ *
+ * NavRow draws a chevron, which in this app means "this opens another
+ * screen". Signing out and deleting an account do not; they ask a question in
+ * place. Three destructive actions wearing chevrons read as three more places
+ * to browse to.
+ *
+ * A `Button` was the other option and is what these used to be — and on a
+ * white card the outline variant is white on white, separated from its
+ * surface by a hairline and a shadow. A row of them reads as a stack of
+ * floating pills rather than as a group of related actions, which is exactly
+ * how the Account screen ended up with "Sign out" and "Delete my account"
+ * carrying identical visual weight.
+ *
+ * So: a row, in a card, with the other rows. `detail` is not optional — an
+ * action worth its own row is worth a line saying what it does, and on this
+ * app's most consequential screen that line is the difference between "I
+ * think this signs me out" and knowing the records stay.
+ */
+export function ActionRow({
+  label,
+  detail,
+  tone = 'default',
+  onPress,
+  last = false,
+}: {
+  label: string;
+  detail: string;
+  tone?: 'default' | 'danger';
+  onPress: () => void;
+  last?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={detail}
+      style={({ pressed }) => [
+        styles.actionRow,
+        !last && styles.navRowDivider,
+        pressed && styles.navRowPressed,
+      ]}
+    >
+      <Text style={[styles.actionLabel, tone === 'danger' && styles.actionLabelDanger]}>
+        {label}
+      </Text>
+      <Text style={styles.actionDetail}>{detail}</Text>
+    </Pressable>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* EmptyState                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -553,6 +612,27 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     minHeight: 56,
     paddingHorizontal: spacing.md,
+  },
+  actionRow: {
+    minHeight: MIN_TOUCH_TARGET,
+    justifyContent: 'center',
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    gap: 2,
+  },
+  actionLabel: {
+    fontSize: fontSize.md,
+    fontWeight: '600',
+    color: colors.ink,
+    fontFamily: fontFamily.semibold,
+  },
+  // Red on the LABEL only. A fully red row reads as an error that has already
+  // happened; this is a control nobody has pressed yet.
+  actionLabelDanger: { color: colors.redDeep },
+  actionDetail: {
+    fontSize: fontSize.sm,
+    color: colors.inkSoft,
+    fontFamily: fontFamily.regular,
   },
   navRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.line },
   navRowPressed: { backgroundColor: colors.bg },

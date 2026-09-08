@@ -55,7 +55,7 @@ export type PullResult = {
  *
  * Rare by construction: it takes a device that has not synced in 90 days.
  */
-async function needsFullResync(): Promise<boolean> {
+async function needsFullResync(owner: string): Promise<boolean> {
   const supabase = getSupabase();
   if (!supabase) return false;
 
@@ -70,7 +70,7 @@ async function needsFullResync(): Promise<boolean> {
   const horizon = Number(data.tombstone_horizon_seq ?? 0);
   if (horizon <= 0) return false;
 
-  return (await lowestCursor()) < horizon;
+  return (await lowestCursor(owner)) < horizon;
 }
 
 /**
@@ -115,15 +115,45 @@ async function applyRow(
 ): Promise<{ removedVideo?: string }> {
   const db = await getDb();
   const id = row.id as string;
-  const columns = Object.keys(spec.columns);
+  const synced = Object.keys(spec.columns);
+
+  /*
+   * ── DEVICE-LOCAL COLUMNS STILL HAVE TO BE SUPPLIED ON INSERT ────────
+   *
+   * `spec.deviceLocal` names the columns that deliberately do not sync —
+   * `videos.file_uri` and `thumb_uri`, because the bytes never leave the
+   * phone. They were left out of the INSERT entirely, which is correct as a
+   * statement about syncing and wrong as SQL: migration 9 moved the paths
+   * into `video_files` and left these behind as dead columns, still declared
+   * NOT NULL with no default. So the insert failed:
+   *
+   *     NOT NULL constraint failed: videos.file_uri
+   *
+   * and because a sync is one transaction, the failure took the entire pull
+   * with it. Any account holding a video could not sync at all, on any
+   * device — including the device that recorded it, as soon as its own rows
+   * came back from the server. It stayed invisible only while the server had
+   * no schema and the pull never returned a row.
+   *
+   * Empty string, not a real path: on the device that owns the bytes the
+   * value is unused (videoRepo joins video_files for the path), and on any
+   * other device there is no file, which is exactly what '' means to
+   * `isLocal` in videoRepo.
+   *
+   * They are placed ONLY in the insert, never in the update assignments
+   * below — a pull must never overwrite a path this device is holding.
+   */
+  const deviceLocal = Object.keys(spec.deviceLocal ?? {});
+  const columns = [...synced, ...deviceLocal];
 
   const values = columns.map((column) => {
+    if (!(column in spec.columns)) return '';
     const value = row[column];
     if (spec.columns[column] === 'bool') return value ? 1 : 0;
     return value ?? null;
   });
 
-  const assignments = columns
+  const assignments = synced
     .filter((c) => c !== 'id')
     .map((c) => `${q(c)} = excluded.${q(c)}`)
     .join(', ');
@@ -166,8 +196,15 @@ async function applyRow(
   return { removedVideo };
 }
 
-/** One table, from its cursor to the end of the server's history. */
-async function pullTable(spec: SyncTableSpec): Promise<{
+/**
+ * One table, from THIS ACCOUNT's cursor to the end of the server's history.
+ *
+ * `owner` is threaded down from the session rather than read from module
+ * state: the cursor it selects decides which rows are asked for, and a cursor
+ * belonging to somebody else skips this account's history without erroring.
+ * See migration 15.
+ */
+async function pullTable(owner: string, spec: SyncTableSpec): Promise<{
   applied: number;
   removedVideoIds: string[];
 }> {
@@ -176,7 +213,7 @@ async function pullTable(spec: SyncTableSpec): Promise<{
 
   let applied = 0;
   const removedVideoIds: string[] = [];
-  let cursor = await getCursor(spec.table);
+  let cursor = await getCursor(owner, spec.table);
 
   // Bounded: 200 pages of 500 is 100k rows, far past any real account, and it
   // guarantees a server that keeps returning the same page cannot hang a sync.
@@ -202,7 +239,7 @@ async function pullTable(spec: SyncTableSpec): Promise<{
 
     // Advance after every page, not only at the end. A pull interrupted
     // halfway then resumes from where it got to instead of replaying.
-    await setCursor(spec.table, cursor);
+    await setCursor(owner, spec.table, cursor);
 
     if (rows.length < PAGE) break;
   }
@@ -224,9 +261,10 @@ export async function pullAll(): Promise<PullResult> {
   if (!sessionData.session) {
     return { applied: 0, removedVideoIds: [], fullResync: false };
   }
+  const owner = sessionData.session.user.id;
 
   let didFullResync = false;
-  if (await needsFullResync()) {
+  if (await needsFullResync(owner)) {
     await fullResync();
     didFullResync = true;
   }
@@ -235,7 +273,7 @@ export async function pullAll(): Promise<PullResult> {
   const removedVideoIds: string[] = [];
 
   for (const spec of SYNC_TABLES) {
-    const result = await pullTable(spec);
+    const result = await pullTable(owner, spec);
     applied += result.applied;
     removedVideoIds.push(...result.removedVideoIds);
   }

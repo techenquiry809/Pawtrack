@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -36,7 +36,9 @@ import {
 } from '@/features/report/range';
 import { collectReport, earliestRecordDay } from '@/features/report/collect';
 import { summarizeReport } from '@/features/report/summarize';
-import { buildReport, shareReport, type BuiltReport } from '@/services/reportExport';
+import {
+  buildReport, saveReport, shareReport, type BuiltReport,
+} from '@/services/reportExport';
 import { DogAvatar } from '@/components/ProfileHeader';
 import { Icon } from '@/components/Icon';
 import { colors, fontFamily, fontSize, radius, spacing, MIN_TOUCH_TARGET } from '@/theme/tokens';
@@ -47,13 +49,28 @@ import { breedDisplay } from '@/db/dogRepo';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import * as medicationRepo from '@/db/medicationRepo';
-import { formatDuration, hasKnownTime, timeOfDay, localDayKey, DAY_MS } from '@/utils/time';
+import { formatDuration, localDayKey, DAY_MS } from '@/utils/time';
 import { buildPatternReport, durationStats } from '@/features/analytics';
 import {
   DOSE_STATUS_LABEL,
   type DailyCheckin, type MedicationDose, type MedicationWithReminders,
   type Seizure,
 } from '@/types/domain';
+
+/*
+  Save means two different acts, so it gets two different words.
+
+  On Android the owner picks a folder and the file is written into it, so
+  "Save to phone" is literally what happens. On iOS the only route an app may
+  take is the share sheet, where the destination is called Save to Files —
+  naming the button after the thing they will tap in the sheet is the
+  difference between a promise kept and a button that appears to do nothing.
+*/
+const SAVE_LABEL = Platform.OS === 'android' ? 'Save to phone' : 'Save to Files';
+const SAVE_HINT =
+  Platform.OS === 'android'
+    ? 'Builds the report and asks you to choose a folder to keep it in'
+    : 'Builds the report and opens the share sheet, where Save to Files keeps a copy';
 
 export default function ReportScreen() {
   const insets = useSafeAreaInsets();
@@ -78,7 +95,12 @@ export default function ReportScreen() {
   const [scope, setScope] = useState<ReportScope>('week');
   const [pickedDay, setPickedDay] = useState(localDayKey());
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [building, setBuilding] = useState(false);
+  /**
+   * Which of the two exports is running, so the right button shows the
+   * spinner. A single boolean put "Creating…" on both, which reads as the app
+   * having started something the owner did not ask for.
+   */
+  const [busy, setBusy] = useState<null | 'save' | 'send'>(null);
   const [preview, setPreview] = useState<{ seizures: number; doses: number } | null>(null);
 
   const dogId = dog?.id;
@@ -158,25 +180,45 @@ export default function ReportScreen() {
       ? 'Every record, up to today'
       : formatRangeLabel(resolveRange(scope, pickedDay));
 
-  const onExport = useCallback(async () => {
-    if (!dog || building) return;
-    setBuilding(true);
-    try {
-      const built: BuiltReport = await buildReport(dog, scope, pickedDay);
-      const outcome = await shareReport(built);
-      if (outcome.status === 'denied' || outcome.status === 'missing') {
-        Alert.alert('Could not share the report', outcome.message);
+  /**
+   * Build the PDF, then either send it or keep it.
+   *
+   * Rebuilt per press rather than cached: the owner can record a dose on
+   * another screen and come back, and a cached file would quietly export
+   * yesterday's version of today. Rendering costs a fraction of a second, and
+   * a report that is wrong is worth nothing however fast it arrives.
+   */
+  const onExport = useCallback(
+    async (intent: 'save' | 'send') => {
+      if (!dog || busy) return;
+      setBusy(intent);
+      try {
+        const built: BuiltReport = await buildReport(dog, scope, pickedDay);
+        const outcome =
+          intent === 'save' ? await saveReport(built) : await shareReport(built);
+
+        if (outcome.status === 'saved') {
+          Alert.alert('Saved to your phone', `You'll find ${built.fileName} in ${outcome.location}.`);
+        } else if (outcome.status === 'denied' || outcome.status === 'missing') {
+          Alert.alert(
+            intent === 'save' ? 'Could not save the report' : 'Could not share the report',
+            outcome.message,
+          );
+        }
+        // 'cancelled' and 'shared' both say nothing: the owner either backed
+        // out on purpose or watched the sheet close. Neither needs an alert.
+      } catch (e) {
+        console.error('[report] export failed', e);
+        Alert.alert(
+          'Could not create the report',
+          'Something went wrong building the PDF. Please try again.',
+        );
+      } finally {
+        setBusy(null);
       }
-    } catch (e) {
-      console.error('[report] export failed', e);
-      Alert.alert(
-        'Could not create the report',
-        'Something went wrong building the PDF. Please try again.',
-      );
-    } finally {
-      setBuilding(false);
-    }
-  }, [dog, scope, pickedDay, building]);
+    },
+    [dog, scope, pickedDay, busy],
+  );
 
   const duration = useMemo(() => durationStats(seizures), [seizures]);
   const report = useMemo(
@@ -273,13 +315,31 @@ export default function ReportScreen() {
                 `, ${preview.doses} ${preview.doses === 1 ? 'dose' : 'doses'} recorded.`}
         </Muted>
 
-        <Button
-          label={building ? 'Creating…' : 'Create PDF'}
-          onPress={() => void onExport()}
-          loading={building}
-          accessibilityHint="Builds the report and opens the share sheet"
-          style={styles.exportBtn}
-        />
+        {/*
+          Two ways out of the same document, the way the video screen offers
+          them: keep it, or send it. One "Create PDF" button that only ever
+          opened the share sheet left an owner who wanted a copy for their own
+          records hunting for Save inside a sheet built for sending.
+        */}
+        <View style={styles.exportBtns}>
+          <Button
+            label={busy === 'save' ? 'Creating…' : SAVE_LABEL}
+            onPress={() => void onExport('save')}
+            loading={busy === 'save'}
+            disabled={busy !== null}
+            accessibilityHint={SAVE_HINT}
+            style={styles.flexOne}
+          />
+          <Button
+            label={busy === 'send' ? 'Creating…' : 'Send'}
+            variant="ghost"
+            onPress={() => void onExport('send')}
+            loading={busy === 'send'}
+            disabled={busy !== null}
+            accessibilityHint="Builds the report and opens the share sheet to send it to your vet"
+            style={styles.flexOne}
+          />
+        </View>
       </Card>
 
       <DatePickerSheet
@@ -313,7 +373,17 @@ export default function ReportScreen() {
           <Fact label="Sex" value={dog.sex ? dog.sex : '—'} />
           <Fact label="Age" value={dog.ageYears === null ? '—' : `${dog.ageYears} yrs`} />
           <Fact label="Weight" value={dog.weightKg === null ? '—' : `${dog.weightKg} kg`} />
-          <Fact label="Diagnosis" value={dog.diagnosisStatus} />
+          {/*
+            An em dash, like every other unfilled fact in this grid — not the
+            word "Undiagnosed". This is a fixed six-cell grid, so the row stays
+            (removing it would leave a hole), but it must not assert a finding
+            where there is none. The generated PDF drops the row entirely,
+            because its facts list is built from what was actually filled in.
+          */}
+          <Fact
+            label="Diagnosis"
+            value={dog.diagnosisStatus === 'undiagnosed' ? '—' : dog.diagnosisStatus}
+          />
           <Fact label="First seizure" value={dog.firstSeizureDate || '—'} />
           <Fact label="Seizure type" value={dog.seizureType || '—'} />
         </View>
@@ -378,16 +448,9 @@ export default function ReportScreen() {
               tone={s.durationConfidence === 'unreliable' ? 'neutral' : 'teal'}
             />
           </View>
-          <Muted style={{ marginTop: 4 }}>
-            {/* The time only when the owner gave one; the observations then
-                stand alone rather than trailing a fabricated "00:00 ·". */}
-            {[
-              timeOfDay(s.start, hasKnownTime(s.timingConfidence)),
-              s.ictalObs.length > 0 ? s.ictalObs.join(', ') : null,
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-          </Muted>
+          {s.ictalObs.length > 0 && (
+            <Muted style={{ marginTop: 4 }}>{s.ictalObs.join(', ')}</Muted>
+          )}
           {(s.retrospective || s.durationConfidence === 'recovered') && (
             <View style={styles.badges}>
               {s.retrospective && <Pill label="Logged later" tone="neutral" />}
@@ -417,11 +480,8 @@ export default function ReportScreen() {
               <Body style={styles.bold}>{m.name}</Body>
               <Muted style={{ marginTop: 2 }}>
                 {[
-                  [m.dose, m.unit].filter((x) => x.trim()).join(''),
+                  [m.dose, m.unit].filter((x) => x.trim()).join(' '),
                   m.frequency,
-                  m.reminders.length > 0
-                    ? m.reminders.map((r) => r.timeHHMM).join(', ')
-                    : null,
                 ]
                   .filter(Boolean)
                   .join(' · ') || 'No amount recorded'}
@@ -445,7 +505,6 @@ export default function ReportScreen() {
                 .sort((a, b) => a.scheduledHHMM.localeCompare(b.scheduledHHMM))
                 .map((d) => (
                   <View key={d.id} style={styles.doseRow}>
-                    <Text style={styles.doseTime}>{d.scheduledHHMM || '—'}</Text>
                     <Muted style={styles.flexOne}>{d.medicationName}</Muted>
                     <Pill
                       label={DOSE_STATUS_LABEL[d.status]}
@@ -554,7 +613,7 @@ const styles = StyleSheet.create({
   },
   datePressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
   previewLine: { marginTop: spacing.sm },
-  exportBtn: { marginTop: spacing.md },
+  exportBtns: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { paddingHorizontal: spacing.lg },
   intro: { marginTop: spacing.sm },
@@ -613,13 +672,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     marginTop: spacing.sm,
-  },
-  doseTime: {
-    fontSize: fontSize.sm,
-    fontWeight: '700',
-    color: colors.ink,
-    fontVariant: ['tabular-nums'],
-    minWidth: 48,
-    fontFamily: fontFamily.bold
   },
 });

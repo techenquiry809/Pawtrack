@@ -113,6 +113,12 @@ export async function createDog(input: NewDogInput): Promise<string> {
   // The row write and its outbox entry share one transaction. If a crash
   // could land between them the row would exist on this phone with nothing
   // recording that it needs pushing — a dog that never reaches the account.
+
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `INSERT INTO dogs (
@@ -123,7 +129,7 @@ export async function createDog(input: NewDogInput): Promise<string> {
         created_at, updated_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        id, newRowOwner(), input.name, breed.breedId, breed.breedName,
+        id, rowOwner, input.name, breed.breedId, breed.breedName,
         breed.breedSource, breed.userEnteredDescription, '',
         input.ageYears ?? null, null, '',
         'undiagnosed', '', '', '', '',
@@ -131,7 +137,7 @@ export async function createDog(input: NewDogInput): Promise<string> {
         now, now,
       ],
     );
-    await enqueue(db, 'dogs', id, 'upsert', now);
+    await enqueue(db, 'dogs', id, 'upsert', rowOwner, now);
   });
   return id;
 }
@@ -183,7 +189,7 @@ export async function updateDog(
         WHERE id = ? AND deleted_at IS NULL AND ${owner.sql}`,
       [...values, ...owner.params],
     );
-    await enqueue(db, 'dogs', id, 'upsert', now);
+    await enqueue(db, 'dogs', id, 'upsert', newRowOwner(), now);
   });
 }
 

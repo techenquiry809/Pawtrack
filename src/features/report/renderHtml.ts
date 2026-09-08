@@ -67,26 +67,6 @@ export function fmtDuration(sec: number | null | undefined): string {
   return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
 }
 
-/** `08:14`, in the local time of whoever is reading. */
-export function fmtClock(epochMs: number): string {
-  const d = new Date(epochMs);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-/**
- * The clock time, or '' when the record does not carry one.
- *
- * A blank time is stored as the start of that day with the confidence field
- * set to 'unknown'. Printing that through fmtClock puts "00:00" on a vet
- * report, where it is indistinguishable from a seizure genuinely observed at
- * midnight — the one confusion a printed record must not introduce. The entry
- * already carries `timingNote`, so the provenance is stated in words either
- * way; the caller drops the element entirely rather than printing an empty one.
- */
-export function fmtClockIfKnown(epochMs: number, confidence: string): string {
-  return confidence === 'unknown' ? '' : fmtClock(epochMs);
-}
-
 const MONTHS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
@@ -96,11 +76,6 @@ const MONTHS = [
 export function fmtDate(epochMs: number): string {
   const d = new Date(epochMs);
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-}
-
-export function fmtDateTime(epochMs: number): string {
-  const d = new Date(epochMs);
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${fmtClock(epochMs)}`;
 }
 
 /**
@@ -170,10 +145,9 @@ export function brandMarkSvg(size = 30): string {
 /**
  * One seizure entry.
  *
- * `showDate` is not cosmetic. Over a single day the time alone identifies an
- * event; over a month or an all-time report it is ambiguous — "10:32" appears
- * dozens of times and a reader cannot tell which day they are looking at
- * without counting back through the list.
+ * `showDate` is not cosmetic. Over a single day one entry needs no date; over
+ * a month or an all-time report, with no clock time printed, the date is the
+ * only thing that tells two entries apart.
  */
 function renderSeizure(s: SeizureWithClips, index: number, showDate: boolean): string {
   const recovery = s.recoverySec && s.recoverySec > 0
@@ -190,7 +164,7 @@ function renderSeizure(s: SeizureWithClips, index: number, showDate: boolean): s
           ${v.thumbUri ? `<img src="${esc(v.thumbUri)}" alt="Still from video ${i + 1}" />` : '<div class="noshot"></div>'}
           <div class="clipmeta">
             <strong>Video ${i + 1} of ${s.videos.length}</strong>
-            <span>${[fmtClockIfKnown(v.timestamp, v.captureConfidence), fmtDuration(v.durationSec)].filter(Boolean).map((t) => esc(t)).join(' · ')}</span>
+            <span>${esc(fmtDuration(v.durationSec))}</span>
             ${v.preNote ? `<span class="cn">Before: ${esc(v.preNote)}</span>` : ''}
             ${v.ictalNote ? `<span class="cn">During: ${esc(v.ictalNote)}</span>` : ''}
             ${v.postNote ? `<span class="cn">After: ${esc(v.postNote)}</span>` : ''}
@@ -203,7 +177,6 @@ function renderSeizure(s: SeizureWithClips, index: number, showDate: boolean): s
     <header>
       <span class="idx">${index + 1}</span>
       ${showDate ? `<span class="day">${esc(fmtDate(s.start))}</span>` : ''}
-      ${fmtClockIfKnown(s.start, s.timingConfidence) ? `<span class="time">${esc(fmtClockIfKnown(s.start, s.timingConfidence))}</span>` : ''}
       <span class="dur">${esc(fmtDuration(s.durationSec))}</span>
       <span class="conf">${esc(timingNote(s))}</span>
     </header>
@@ -219,18 +192,89 @@ function renderSeizure(s: SeizureWithClips, index: number, showDate: boolean): s
   </article>`;
 }
 
+/**
+ * A stored 'HH:MM' slot as '8:00 am'.
+ *
+ * ── WHY THIS IS NOT `formatTimeOfDay` FROM utils/time ─────────────────
+ *
+ * It is the same conversion, deliberately duplicated, and the duplication is
+ * forced rather than chosen. This module is loaded by `node --test` under
+ * native TypeScript stripping, which is why every import at the top is
+ * `import type` — those vanish at runtime. A VALUE import cannot be added:
+ * `@/utils/time` has an alias node cannot resolve, `../../utils/time` needs
+ * an extension node insists on, and `../../utils/time.ts` is an extension
+ * `tsc` rejects without allowImportingTsExtensions, which the app config
+ * deliberately does not have. All three were tried.
+ *
+ * Keep the two in step. utils/time.ts is the one with the tests.
+ */
+function clockTime(timeHHMM: string): string {
+  const [rawHour, rawMinute] = timeHHMM.split(':');
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return timeHHMM;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return timeHHMM;
+  const meridiem = hour < 12 ? 'am' : 'pm';
+  const display = hour % 12 === 0 ? 12 : hour % 12;
+  return `${display}:${String(minute).padStart(2, '0')} ${meridiem}`;
+}
+
+/** What the owner reported, in words. Never the raw enum. */
+const DOSE_WORDS: Record<string, string> = {
+  given: 'Given on time',
+  late: 'Given late',
+  missed: 'Not given',
+};
+
+/**
+ * The dose log, grouped by day.
+ *
+ * ── WHAT CHANGED, AND WHY ─────────────────────────────────────────────
+ *
+ * Every row used to repeat the date and print the raw status enum, so a day
+ * with three doses read:
+ *
+ *     2026-09-08   No mesh   given
+ *     2026-09-08   No mesh   given
+ *     2026-09-08   No mesh   given
+ *
+ * — three identical lines, and nothing saying which dose each one was. The
+ * date is now a heading over its own group and the slot time identifies the
+ * row, which is the column a vet is actually reading down.
+ *
+ * ── THE TIME IS THE SCHEDULED SLOT, NOT AN ADMINISTRATION TIME ────────
+ *
+ * This matters and the column is named for it. The app does not record when a
+ * tablet was physically given — it records which SLOT was answered and what
+ * the owner reported about it. `recordedAt` exists but is the moment they
+ * tapped, which can be the following morning, and printing that under a
+ * heading like "Given at" would put a fabricated clinical timestamp in a
+ * document a vet may dose from. So the column says "Scheduled", and the
+ * status beside it carries whether that schedule was met.
+ */
 function renderDoses(rows: DoseWithName[]): string {
   if (rows.length === 0) return '<p class="none">No medication recorded in this period.</p>';
+
+  // Rows arrive ordered by date then slot (listDosesBetween), so a group
+  // breaks whenever the date changes — no sorting or bucketing needed.
+  let lastDate = '';
+  const body = rows.map((d) => {
+    const heading = d.doseDate === lastDate
+      ? ''
+      : `<tr class="daybreak"><td colspan="3">${esc(d.doseDate)}</td></tr>`;
+    lastDate = d.doseDate;
+    return `${heading}
+      <tr>
+        <td class="t">${d.scheduledHHMM ? esc(clockTime(d.scheduledHHMM)) : '—'}</td>
+        <td>${esc(d.medicationName ?? 'Medication no longer listed')}</td>
+        <td class="s-${esc(d.status)}">${esc(DOSE_WORDS[d.status] ?? d.status)}</td>
+      </tr>`;
+  }).join('');
+
   return `
   <table class="doses">
-    <thead><tr><th>Day</th><th>Time</th><th>Medication</th><th>Status</th></tr></thead>
-    <tbody>${rows.map((d) => `
-      <tr>
-        <td>${esc(d.doseDate)}</td>
-        <td>${esc(d.scheduledHHMM ?? '—')}</td>
-        <td>${esc(d.medicationName ?? 'Medication no longer listed')}</td>
-        <td class="s-${esc(d.status)}">${esc(d.status)}</td>
-      </tr>`).join('')}</tbody>
+    <thead><tr><th>Scheduled</th><th>Medication</th><th>Status</th></tr></thead>
+    <tbody>${body}</tbody>
   </table>`;
 }
 
@@ -303,7 +347,12 @@ function renderDogFacts(dog: Dog, breedLabel: string): string {
     fact('Age', dog.ageYears !== null ? `${dog.ageYears} years` : ''),
     fact('Weight', dog.weightKg !== null ? `${dog.weightKg} kg` : ''),
     fact('Date of birth', dog.dob),
-    fact('Diagnosis', dog.diagnosisStatus),
+    // 'undiagnosed' is this field's empty value, not an answer, and printing
+    // "Diagnosis  undiagnosed" states the absence of information as though it
+    // were information — in a document whose whole point is what IS known.
+    // A real status ('suspected', 'diagnosed') still prints; it is exactly
+    // the fact a referral vet reads first.
+    fact('Diagnosis', dog.diagnosisStatus === 'undiagnosed' ? '' : dog.diagnosisStatus),
     fact('First seizure', dog.firstSeizureDate),
     fact('Seizure type', dog.seizureType),
     fact('Allergies', dog.allergies),
@@ -325,16 +374,14 @@ function renderRegimen(meds: MedicationWithReminders[]): string {
   }
   return `
   <table class="grid">
-    <thead><tr><th>Medication</th><th>Dose</th><th>Frequency</th><th>Reminders</th><th>Prescriber</th></tr></thead>
+    <thead><tr><th>Medication</th><th>Dose</th><th>Frequency</th><th>Prescriber</th></tr></thead>
     <tbody>${meds.map((m) => {
       const dose = [m.dose, m.unit].filter((x) => x && x.trim()).join(' ');
-      const times = m.reminders.filter((r) => r.enabled).map((r) => r.timeHHMM);
       return `
       <tr>
         <td class="strong">${esc(m.name)}</td>
         <td>${esc(dose || '—')}</td>
         <td>${esc(m.frequency || '—')}</td>
-        <td>${times.length > 0 ? esc(times.join(', ')) : '<span class="none">none set</span>'}</td>
         <td>${esc(m.prescriber || '—')}</td>
       </tr>`;
     }).join('')}</tbody>
@@ -505,7 +552,6 @@ export function renderReportHtml(input: RenderInput): string {
                     padding-bottom: 5pt; border-bottom: 1px solid #EFEADF; }
   .idx { background: #2F7E86; color: #fff; width: 15pt; height: 15pt; border-radius: 8pt;
          text-align: center; font-size: 9pt; font-weight: 700; line-height: 15pt; }
-  .time { font-weight: 700; font-size: 12pt; }
   .day { font-weight: 700; font-size: 11pt; }
   .dur { font-weight: 600; color: #215D64; }
   .conf { margin-left: auto; font-size: 8.5pt; color: #5B6472; font-style: italic; }
@@ -533,6 +579,10 @@ export function renderReportHtml(input: RenderInput): string {
   table.grid td, table.doses td { padding: 4pt 5pt; border-bottom: 1px solid #EFEADF; vertical-align: top; }
   table.grid tr, table.doses tr { page-break-inside: avoid; }
   .s-given { color: #2E5A37; } .s-late { color: #8A5A17; } .s-missed { color: #A93327; }
+  /* The date, once per group, rather than repeated down every row. */
+  table.doses tr.daybreak td { background: #F6F2EA; font-weight: 700; font-size: 8pt;
+    letter-spacing: 0.3pt; padding-top: 6pt; border-bottom: 1px solid #E7E0D2; }
+  table.doses td.t { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .foot { font-size: 8.5pt; color: #5B6472; margin: 5pt 0 0; }
   footer { margin-top: 16pt; padding-top: 7pt; border-top: 1px solid #E7E0D2;
            font-size: 8.5pt; color: #8A93A1; display: flex; justify-content: space-between; gap: 10pt; }
@@ -580,7 +630,7 @@ export function renderReportHtml(input: RenderInput): string {
   ${renderCareTeam(dog) ? `<h2>Care team</h2>${renderCareTeam(dog)}` : ''}
 
   <footer>
-    <span>Generated by PawTrack${input.appUrl ? ` · ${esc(input.appUrl)}` : ''} · ${esc(fmtDateTime(summary.generatedAt))}</span>
+    <span>Generated by PawTrack${input.appUrl ? ` · ${esc(input.appUrl)}` : ''} · ${esc(fmtDate(summary.generatedAt))}</span>
     <span>Owner-recorded observations. Not a medical device and not veterinary advice.</span>
   </footer>
 </body></html>`;

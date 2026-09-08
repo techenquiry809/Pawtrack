@@ -172,6 +172,11 @@ export async function createMedication(
   MedicationSchema.parse({ ...input, id, createdAt: now, updatedAt: now });
 
   const db = await getDb();
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `INSERT INTO medications
@@ -179,12 +184,12 @@ export async function createMedication(
           prescriber, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,'',?,?,?)`,
       [
-        id, newRowOwner(), input.dogId, input.name.trim(), input.dose.trim(),
+        id, rowOwner, input.dogId, input.name.trim(), input.dose.trim(),
         input.unit.trim(), input.frequency.trim(), input.prescriber.trim(),
         now, now,
       ],
     );
-    await enqueue(db, 'medications', id, 'upsert', now);
+    await enqueue(db, 'medications', id, 'upsert', rowOwner, now);
   });
   return id;
 }
@@ -213,12 +218,19 @@ export async function updateMedication(
   values.push(now, id);
 
   const db = await getDb();
+  // Fenced to the signed-in account as well as the id. Every caller reaches
+  // this through an owner-scoped read, so nothing crosses accounts today —
+  // but the outbox entry stamps the CURRENT owner, so an unfenced UPDATE would
+  // push somebody else's prescription into this account the first time a call
+  // site skipped that read. Same reasoning as dogRepo.updateDog.
+  const owner = ownerScope();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      `UPDATE medications SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
-      values,
+      `UPDATE medications SET ${sets.join(', ')}
+        WHERE id = ? AND deleted_at IS NULL AND ${owner.sql}`,
+      [...values, ...owner.params],
     );
-    await enqueue(db, 'medications', id, 'upsert', now);
+    await enqueue(db, 'medications', id, 'upsert', newRowOwner(), now);
   });
 }
 
@@ -308,6 +320,11 @@ export async function addReminder(
     [medicationId],
   );
 
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `INSERT INTO medication_reminders
@@ -315,13 +332,67 @@ export async function addReminder(
           notification_id, created_at, updated_at)
        VALUES (?,?,?,?,?,1,NULL,?,?)`,
       [
-        id, parent?.user_id ?? newRowOwner(), parent?.dog_id ?? null,
+        id, parent?.user_id ?? rowOwner, parent?.dog_id ?? null,
         medicationId, timeHHMM, now, now,
       ],
     );
-    await enqueue(db, 'medication_reminders', id, 'upsert', now);
+    await enqueue(db, 'medication_reminders', id, 'upsert', rowOwner, now);
   });
   return id;
+}
+
+/**
+ * Move an existing reminder to a different time.
+ *
+ * ── WHY THIS EXISTS RATHER THAN DELETE-AND-ADD ────────────────────────
+ *
+ * Because the row is the thing an owner has been toggling on and off, and it
+ * syncs. Deleting it and inserting a replacement writes a tombstone plus a new
+ * id for what is, to the person holding the phone, a correction to one field —
+ * so a second device would see a reminder vanish and a different one appear,
+ * and any dose already logged against the row would be reasoning about a
+ * reminder that no longer exists.
+ *
+ * The caller is responsible for cancelling the old notification and scheduling
+ * the new one. That cannot happen here: `notification_id` is a handle owned by
+ * THIS device (see setReminderNotificationId) and the scheduler lives in
+ * services/, which db/ must not depend on.
+ *
+ * Returns false when the medication already has a reminder at that time —
+ * two alarms at 8am is not a state worth creating, and the caller shows the
+ * existing one instead.
+ */
+export async function setReminderTime(
+  reminderId: string,
+  timeHHMM: string,
+): Promise<boolean> {
+  const db = await getDb();
+  const now = Date.now();
+
+  const owner = ownerScope();
+  const row = await db.getFirstAsync<{ medication_id: string }>(
+    `SELECT medication_id FROM medication_reminders_live
+      WHERE id = ? AND ${owner.sql}`,
+    [reminderId, ...owner.params],
+  );
+  if (!row) return false;
+
+  const clash = await db.getFirstAsync<{ id: string }>(
+    `SELECT id FROM medication_reminders_live
+      WHERE medication_id = ? AND time_hhmm = ? AND id <> ? AND ${owner.sql}`,
+    [row.medication_id, timeHHMM, reminderId, ...owner.params],
+  );
+  if (clash) return false;
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE medication_reminders SET time_hhmm = ?, updated_at = ?
+        WHERE id = ? AND deleted_at IS NULL AND ${owner.sql}`,
+      [timeHHMM, now, reminderId, ...owner.params],
+    );
+    await enqueue(db, 'medication_reminders', reminderId, 'upsert', newRowOwner(), now);
+  });
+  return true;
 }
 
 export async function setReminderEnabled(
@@ -330,13 +401,17 @@ export async function setReminderEnabled(
 ): Promise<void> {
   const db = await getDb();
   const now = Date.now();
+  // Fenced to the signed-in account. Unlike setReminderTime above, this one
+  // had no owner-scoped lookup in front of it either — the id went straight
+  // into the UPDATE.
+  const owner = ownerScope();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE medication_reminders SET enabled = ?, updated_at = ?
-        WHERE id = ? AND deleted_at IS NULL`,
-      [toSqlBool(enabled), now, reminderId],
+        WHERE id = ? AND deleted_at IS NULL AND ${owner.sql}`,
+      [toSqlBool(enabled), now, reminderId, ...owner.params],
     );
-    await enqueue(db, 'medication_reminders', reminderId, 'upsert', now);
+    await enqueue(db, 'medication_reminders', reminderId, 'upsert', newRowOwner(), now);
   });
 }
 
@@ -362,9 +437,14 @@ export async function setReminderNotificationId(
   notificationId: string | null,
 ): Promise<void> {
   const db = await getDb();
+  // Device-local and unsynced, but still fenced: a handle written against
+  // another account's reminder row would let this device cancel — or fail to
+  // cancel — a notification for a dog it has no business touching.
+  const owner = ownerScope();
   await db.runAsync(
-    'UPDATE medication_reminders SET notification_id = ? WHERE id = ?',
-    [notificationId, reminderId],
+    `UPDATE medication_reminders SET notification_id = ?
+      WHERE id = ? AND ${owner.sql}`,
+    [notificationId, reminderId, ...owner.params],
   );
 }
 
@@ -412,6 +492,12 @@ export async function recordDose(input: {
   // the generated id would push a row that does not exist. Two phones logging
   // the same dose slot is ONE dose — the unique index is the constraint, and
   // the database tells us which row it resolved onto.
+
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     const written = await db.getFirstAsync<{ id: string }>(
       `INSERT INTO medication_doses
@@ -426,11 +512,11 @@ export async function recordDose(input: {
          deleted_at  = NULL
        RETURNING id`,
       [
-        uid(), newRowOwner(), input.medicationId, input.dogId, doseDate,
+        uid(), rowOwner, input.medicationId, input.dogId, doseDate,
         scheduledHHMM, input.status, now, input.note ?? '', now, now,
       ],
     );
-    if (written) await enqueue(db, 'medication_doses', written.id, 'upsert', now);
+    if (written) await enqueue(db, 'medication_doses', written.id, 'upsert', rowOwner, now);
   });
 }
 

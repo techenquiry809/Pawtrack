@@ -21,10 +21,21 @@
  * dashboard, and they are labelled with the same words, so the row on Home and
  * the control in the form cannot drift apart in an owner's head.
  *
- * Tapping one SAVES IMMEDIATELY into today's row, creating it if today has not
- * been logged yet. Everything else on an existing row is left untouched, and
- * tapping again just replaces the value — one record per day, last tap wins,
- * enforced by the unique index rather than by this screen remembering.
+ * Tapping one SAVES IMMEDIATELY into the day's row, creating it if that day
+ * has not been logged yet. Everything else on an existing row is left
+ * untouched — one record per day, enforced by the unique index rather than by
+ * this screen remembering.
+ *
+ * ── ONE TAP, ONCE A DAY, AND THE DAY ENDS AT 4AM ──────────────────────
+ *
+ * The card asks, is answered, and leaves: a card that only restates a value
+ * the owner just chose is clutter, and it sits above the seizure timer. It
+ * comes back when the pulse day rolls over — at 4am local, not midnight, so
+ * someone still up at 1am is not asked the same question twice in one evening
+ * (see `pulseDayKey` in utils/time.ts, which also explains why only this card
+ * uses that boundary and every medical record still uses the calendar day).
+ *
+ * Re-answering is not a dead end: the Check-in tab edits the same row.
  *
  * ── HOW THAT AVOIDS FABRICATING THE CONTROL DATASET ───────────────────
  *
@@ -36,7 +47,7 @@
  * a stress rating that would have been invented.
  *
  * Both halves are now handled properly instead of avoided.
- * `checkinRepo.setTodaysEnergy` updates only the energy column on an existing
+ * `checkinRepo.setEnergyForDate` updates only the energy column on an existing
  * row, and when it has to create one it marks it `mood_only` — meaning the
  * energy is real and nothing else on the row is. Analytics skips those rows
  * for the fields nobody answered, so a tap can never move a figure a vet
@@ -48,7 +59,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View,
+  Animated, AppState, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -60,7 +72,8 @@ import { SectionRule } from '@/components/form';
 import { Icon, type IconName } from '@/components/Icon';
 import { VideoTile } from '@/components/VideoTile';
 import { thumbnailUri } from '@/services/videoService';
-import { MoodFace, type MoodReaction } from '@/components/MoodFace';
+import { MoodFace } from '@/components/MoodFace';
+import { MoodStatusBar } from '@/components/MoodStatusBar';
 import { ClusterAlert } from '@/components/ClusterAlert';
 import { activeCluster } from '@/features/analytics';
 import { seizuresPerDay } from '@/features/analytics/daily';
@@ -74,7 +87,7 @@ import { DogAvatar } from '@/components/ProfileHeader';
 import * as seizureRepo from '@/db/seizureRepo';
 import * as checkinRepo from '@/db/checkinRepo';
 import * as videoRepo from '@/db/videoRepo';
-import { formatDuration, hasKnownTime, localDayKey, timeOfDay } from '@/utils/time';
+import { formatDuration, hasKnownTime, pulseDayKey, timeOfDay } from '@/utils/time';
 import type { DailyCheckin, GalleryEntry, Seizure } from '@/types/domain';
 
 const DAY_MS = 86_400_000;
@@ -101,8 +114,9 @@ const TREND_DAYS = 14;
 const BAR_H = 28;
 
 /**
- * The five steps of `daily_checkins.energy`, each carrying its own face, name
- * and colour.
+ * The five steps of `daily_checkins.energy`, each carrying its own name and
+ * colour. The face itself — the same dog head at five states — is drawn by
+ * MoodFace from `value` alone; nothing here describes its shape.
  *
  * Every face is tinted with its OWN state at rest, so the row reads as a scale
  * from flat to bouncy before anything is selected — a row of five identical
@@ -115,13 +129,10 @@ const BAR_H = 28;
  * event palette in tokens.ts deliberately avoids relying on alone.
  */
 const ENERGY_STEPS: {
-  icon: IconName;
   name: string;
   tint: string;
   ink: string;
   solid: string;
-  /** How the face moves on commit — see MoodFace. */
-  reaction: MoodReaction;
   /**
    * The haptic that goes with it.
    *
@@ -131,19 +142,37 @@ const ENERGY_STEPS: {
    * and a success pattern for zoomies lets the hand tell them apart.
    */
   haptic: 'light' | 'medium' | 'success';
+  /**
+   * A single emoji for the status bar, after the mood word.
+   *
+   * Additive only — it is never the sole carrier of the step. The word beside
+   * it says the same thing, which is what a screen reader announces and what
+   * anyone whose font does not render a given emoji still gets.
+   */
+  glyph: string;
 }[] = [
-  { icon: 'energy1', name: 'Flat', tint: colors.redTint, ink: colors.redDeep, solid: colors.red, reaction: 'settle', haptic: 'light' },
-  { icon: 'energy2', name: 'Low', tint: colors.amberTint, ink: colors.amberInk, solid: colors.amber, reaction: 'sway', haptic: 'light' },
-  { icon: 'energy3', name: 'Steady', tint: colors.bg, ink: colors.inkSoft, solid: colors.inkSoft, reaction: 'pulse', haptic: 'medium' },
-  { icon: 'energy4', name: 'Good', tint: colors.tealTint, ink: colors.tealDeep, solid: colors.teal, reaction: 'hop', haptic: 'medium' },
-  { icon: 'energy5', name: 'Bouncy', tint: colors.greenTint, ink: colors.greenInk, solid: colors.green, reaction: 'celebrate', haptic: 'success' },
+  { name: 'Flat', tint: colors.redTint, ink: colors.redDeep, solid: colors.red, haptic: 'light', glyph: '💤' },
+  { name: 'Low', tint: colors.amberTint, ink: colors.amberInk, solid: colors.amber, haptic: 'light', glyph: '🌥️' },
+  { name: 'Steady', tint: colors.bg, ink: colors.inkSoft, solid: colors.inkSoft, haptic: 'medium', glyph: '🐾' },
+  { name: 'Good', tint: colors.tealTint, ink: colors.tealDeep, solid: colors.teal, haptic: 'medium', glyph: '✨' },
+  { name: 'Bouncy', tint: colors.greenTint, ink: colors.greenInk, solid: colors.green, haptic: 'success', glyph: '⚡' },
 ];
 
 /** @see `pulseStage` in HomeScreen. */
-type PulseStage = 'ask' | 'thanks' | 'gone';
+type PulseStage = 'ask' | 'thanks' | 'summary';
 
-/** How long the confirmation is held before the card collapses. */
-const PULSE_THANKS_MS = 1600;
+/**
+ * How long the answered card is held before it morphs into the status bar.
+ *
+ * Shorter than the 1600ms it was when the card collapsed to NOTHING. That
+ * pause had to be long enough to read a confirmation that was about to be
+ * taken away; the bar keeps saying the same thing afterwards, so the hold only
+ * has to cover the selected face settling.
+ */
+const PULSE_THANKS_MS = 1100;
+
+/** The card → bar morph. Slow enough to follow, short enough not to wait on. */
+const PULSE_MORPH_MS = 520;
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -160,31 +189,68 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
 
   /**
-   * Whether the Daily Pulse card is still on screen.
+   * Which of the two things the Daily Pulse slot is showing.
    *
-   *   'ask'    today has no answer yet, and the row is the point of the screen
-   *   'thanks' answered just now — the confirmation is held briefly so the
-   *            owner actually reads what was recorded before it leaves
-   *   'gone'   collapsed; everything below has taken the space
+   *   'ask'     the day has no answer yet, and the face row is the point of
+   *             the screen
+   *   'thanks'  answered just now — held briefly so the chosen face settles
+   *             before the slot starts moving
+   *   'summary' the status bar: the same slot, a fraction of the height,
+   *             showing what was recorded
    *
-   * Once the day is answered the card has nothing left to ask, and a card that
-   * only restates a value the owner just chose is the kind of clutter that
-   * pushes the seizure timer down the screen. It is not a dead end: the
-   * Check-in tab edits the same row, and a new day puts the card back.
+   * Once the day is answered the card has nothing left to ask, and a
+   * full-height card restating a value the owner just chose pushes the
+   * seizure timer down the screen. It does not vanish, though — that took the
+   * answer away with it. It becomes a line. The Check-in tab still edits the
+   * same row, and the 4am rollover puts the asking card back.
    */
   const [pulseStage, setPulseStage] = useState<PulseStage>('ask');
   /**
-   * True once the owner has answered IN THIS SESSION.
+   * 0 = the asking card, 1 = the answered status bar.
+   *
+   * ONE value drives the whole transition — the slot's height, the card
+   * fading back, the bar rising in. Two animations racing at slightly
+   * different durations is what makes a morph look cheap; a single clock
+   * cannot get out of step with itself.
+   */
+  const morph = useRef(new Animated.Value(0)).current;
+  /**
+   * True only while the morph is playing.
+   *
+   * It gates `overflow: hidden`, which is needed DURING the transition (the
+   * taller card has to be clipped as the slot shrinks past it) and is wrong
+   * at either end, where it would clip the card's own drop shadow and leave
+   * it looking flat against the page.
+   */
+  const [morphing, setMorphing] = useState(false);
+  /**
+   * Natural heights of the two states, in points, captured on layout.
+   *
+   * Both are needed before the slot can be given an animatable height: you
+   * cannot tween to or from `auto`. Until they are known the slot is left to
+   * size itself, which is the correct behaviour for the very first render.
+   */
+  const [pulseHeights, setPulseHeights] = useState({ ask: 0, bar: 0 });
+  /**
+   * WHICH pulse day the owner answered in this session, or null.
    *
    * `load()` re-runs on every focus and will report a check-in that exists,
    * which would otherwise let the "already answered, skip the animation"
    * branch below fire the instant the optimistic write lands — collapsing the
    * card before the celebration had a frame to play.
+   *
+   * It holds the day rather than a bare `true` so it expires on its own. A
+   * flag would outlive the day it was set for: leave the app open overnight,
+   * 4am passes, and the card would stay collapsed for a day it never asked
+   * about. Comparing days means the rollover needs nothing to reset it.
    */
-  const answeredNow = useRef(false);
-  const pulseHeight = useRef(new Animated.Value(1)).current;
-  /** Natural height in points, captured on layout so it can be animated to 0. */
-  const pulseMeasured = useRef(0);
+  const answeredDay = useRef<string | null>(null);
+  /**
+   * The day the pulse is currently asking about — recomputed by `load()`,
+   * which runs on every focus, so returning to Home after 4am brings the card
+   * back without a relaunch.
+   */
+  const [pulseDay, setPulseDay] = useState(() => pulseDayKey());
 
   const dogId = dog?.id;
 
@@ -193,13 +259,19 @@ export default function HomeScreen() {
     try {
       const [list, today, gallery] = await Promise.all([
         seizureRepo.listSeizuresSince(dogId, Date.now() - 400 * DAY_MS),
-        checkinRepo.getTodaysCheckin(dogId),
+        // The pulse day, not today. Between midnight and 4am those differ,
+        // and reading "today" there would show an empty card for a day the
+        // owner has not reached yet — see pulseDayKey in utils/time.ts.
+        checkinRepo.getCheckinForDate(dogId, pulseDayKey()),
         // Best-effort: the video strip is a nicety and must never be the
         // reason the dashboard fails to render.
         videoRepo.listGallery(dogId).catch(() => [] as GalleryEntry[]),
       ]);
       setSeizures(list);
       setCheckin(today);
+      // Recomputed here rather than on a timer: this runs on every focus, and
+      // a clock ticking in the background to move a card is not worth a frame.
+      setPulseDay(pulseDayKey());
       setVideos(gallery);
     } catch (e) {
       console.error('[home] load failed', e);
@@ -215,6 +287,30 @@ export default function HomeScreen() {
       void load();
     }, [load]),
   );
+
+  /**
+   * Reload when the app comes back to the foreground.
+   *
+   * ── THE GAP THIS CLOSES, AND IT IS THE COMMON ONE ─────────────────────
+   *
+   * `useFocusEffect` fires when this SCREEN is focused, not when the app is.
+   * Background the app while standing on Home — which is where it is left,
+   * because Home is the first tab — and every hour that passes changes
+   * nothing: not the seizure counts, not the trend, and not the pulse day.
+   *
+   * That last one is the reason this exists. The Daily Pulse rolls over at
+   * 4am (see pulseDayKey), so the phone left on Home overnight and picked up
+   * at 8am would still be showing yesterday's answered status bar, with no
+   * way to record today's, until the owner tapped another tab and came back.
+   * A card that only refreshes if you happen to navigate is not a card that
+   * refreshes every day.
+   */
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void load();
+    });
+    return () => sub.remove();
+  }, [load]);
 
   const now = Date.now();
 
@@ -267,36 +363,122 @@ export default function HomeScreen() {
    * owner did not make.
    */
   useEffect(() => {
-    if (loading || answeredNow.current) return;
-    setPulseStage(checkin ? 'gone' : 'ask');
-  }, [loading, checkin]);
+    if (loading) return;
+    // Answered in this session, on the day currently being asked about — the
+    // 'thanks' → 'summary' morph owns the slot and must not be pre-empted.
+    // Once the day rolls over at 4am this no longer matches, and the card
+    // comes back on its own.
+    if (answeredDay.current === pulseDay) return;
+    // Reset the morph alongside the stage. Without it, a day that rolls over
+    // while the app is open would put the asking card back with the value
+    // still parked at 1 — an invisible card in a bar-height slot.
+    morph.setValue(checkin ? 1 : 0);
+    setPulseStage(checkin ? 'summary' : 'ask');
+  }, [loading, checkin, pulseDay, morph]);
 
-  /** Hold the confirmation, then collapse and hand the space to the cards below. */
+  /** Hold the confirmation, then morph the card down into the status bar. */
   useEffect(() => {
     if (pulseStage !== 'thanks') return;
 
     const timer = setTimeout(() => {
       if (reducedMotion) {
-        setPulseStage('gone');
+        morph.setValue(1);
+        setPulseStage('summary');
         return;
       }
-      Animated.timing(pulseHeight, {
-        toValue: 0,
-        duration: 380,
-        easing: Easing.inOut(Easing.cubic),
-        // Height and margin are layout properties; the native driver cannot
-        // carry them. This is one card collapsing once, not a per-frame
-        // gesture, so the JS-thread cost is not worth designing around.
+      setMorphing(true);
+      Animated.timing(morph, {
+        toValue: 1,
+        duration: PULSE_MORPH_MS,
+        // Decelerating hard at the end: the bar arrives and settles rather
+        // than coasting to a stop. Easing.inOut reads as mechanical on a
+        // shape change this large.
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        // Height is a layout property; the native driver cannot carry it, and
+        // splitting the opacity onto a second native-driven value would put
+        // the two halves of one morph on two different clocks. One card, once
+        // a day — the JS-thread cost is not worth designing around.
         useNativeDriver: false,
       }).start(({ finished }) => {
-        if (finished) setPulseStage('gone');
+        setMorphing(false);
+        if (finished) setPulseStage('summary');
       });
     }, PULSE_THANKS_MS);
 
     return () => clearTimeout(timer);
-  }, [pulseStage, reducedMotion, pulseHeight]);
+  }, [pulseStage, reducedMotion, morph]);
+
+  /**
+   * The four things the morph drives, derived once rather than rebuilt inline
+   * on every render.
+   *
+   * The card leaves BEFORE the bar arrives (its opacity is done by 0.42, the
+   * bar's does not start until 0.32) so the two only overlap briefly in the
+   * middle. Cross-fading them over the same window makes both look
+   * semi-transparent at the halfway point, which reads as a glitch rather
+   * than as one thing becoming another.
+   */
+  const morphStyles = useMemo(
+    () => ({
+      askOpacity: morph.interpolate({
+        inputRange: [0, 0.42],
+        outputRange: [1, 0],
+        extrapolate: 'clamp' as const,
+      }),
+      askScale: morph.interpolate({ inputRange: [0, 1], outputRange: [1, 0.97] }),
+      barOpacity: morph.interpolate({
+        inputRange: [0.32, 0.9],
+        outputRange: [0, 1],
+        extrapolate: 'clamp' as const,
+      }),
+      barLift: morph.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }),
+    }),
+    [morph],
+  );
+
+  /**
+   * The slot's height, tweened between the two measured states.
+   *
+   * `undefined` until BOTH are known, which leaves the slot sizing itself —
+   * the right behaviour on a first render, and the only one available, since
+   * there is nothing to tween between yet.
+   */
+  const pulseSlotHeight = useMemo(
+    () =>
+      pulseHeights.ask > 0 && pulseHeights.bar > 0
+        ? morph.interpolate({
+            inputRange: [0, 1],
+            outputRange: [pulseHeights.ask, pulseHeights.bar],
+          })
+        : undefined,
+    [morph, pulseHeights.ask, pulseHeights.bar],
+  );
+
+  /** Only ever grows for a given state, and never re-sets to the same value. */
+  const measurePulse = (key: 'ask' | 'bar') => (e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (h <= 0) return;
+    setPulseHeights((prev) =>
+      Math.abs(prev[key] - h) < 0.5 ? prev : { ...prev, [key]: h },
+    );
+  };
 
   if (!dog) return null;
+
+  /**
+   * The step the day was answered with, carrying its own 1-5 value.
+   *
+   * Bundled together because the status bar needs both and they come from two
+   * places — the value from the stored row, the name/colour/glyph from
+   * ENERGY_STEPS. Passing them separately invites the pair to be indexed
+   * apart and drift by one.
+   */
+  const answeredStep = checkin
+    ? (() => {
+        const step = ENERGY_STEPS[checkin.energy - 1];
+        return step ? { ...step, value: checkin.energy } : undefined;
+      })()
+    : undefined;
 
   const last = seizures[0];
   /** The five most recent, newest first. listSeizuresSince already sorts DESC. */
@@ -385,10 +567,11 @@ export default function HomeScreen() {
       }
     }
 
-    // The card now has its answer, so it starts its exit — but only after the
-    // reaction and the confirmation line have had their moment. Set BEFORE the
-    // optimistic write so `load()` returning cannot beat it to the state.
-    answeredNow.current = true;
+    // The day is answered. The card holds its confirmation briefly and then
+    // collapses — it has nothing left to ask, and a card that only restates a
+    // value the owner just chose pushes the seizure timer down the screen.
+    // The Check-in tab still edits the same row, and 4am puts the card back.
+    answeredDay.current = pulseDay;
     setPulseStage('thanks');
 
     // Optimistic, so the row responds under the finger rather than after a
@@ -402,7 +585,7 @@ export default function HomeScreen() {
         // the few milliseconds it exists.
         : {
             id: '', dogId: dog.id, timestamp: Date.now(),
-            checkInDate: localDayKey(), sleepHrs: null,
+            checkInDate: pulseDay, sleepHrs: null,
             appetite: 'normal', water: 'normal', energy: value, stress: 2,
             medOnTime: true, gi: 'none', unusual: '', backfilled: false,
             moodOnly: true, createdAt: Date.now(), updatedAt: Date.now(),
@@ -410,7 +593,10 @@ export default function HomeScreen() {
     );
 
     try {
-      await checkinRepo.setTodaysEnergy(dog.id, value);
+      // Written against the PULSE day, matching what load() read. Using
+      // "today" here would, between midnight and 4am, save the answer to a
+      // different row than the one the card is showing.
+      await checkinRepo.setEnergyForDate(dog.id, pulseDay, value);
       // Re-read rather than trusting the optimistic value: the row may have
       // just been created, and it now has a real id the placeholder lacked.
       await load();
@@ -419,9 +605,9 @@ export default function HomeScreen() {
       setCheckin(previous);
       // Nothing was recorded, so the card must not leave. Putting it back to
       // 'ask' also cancels the collapse timer through the effect's cleanup.
-      answeredNow.current = false;
-      pulseHeight.setValue(1);
-      setPulseStage(previous ? 'gone' : 'ask');
+      answeredDay.current = null;
+      morph.setValue(previous ? 1 : 0);
+      setPulseStage(previous ? 'summary' : 'ask');
     }
   };
 
@@ -467,32 +653,41 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* --- Daily pulse -----------------------------------------------
-          Present only until the day is answered. See `pulseStage`. */}
-      {pulseStage !== 'gone' ? (
+      {/* --- Daily pulse ------------------------------------------------
+          Asks once per pulse day, then becomes the status bar in the same
+          slot. See `pulseStage` and the morph effect. */}
+      {pulseStage === 'summary' && answeredStep ? (
+        /*
+          Rendered PLAINLY, with no morph container around it.
+          Nothing just happened — the day was already answered before this
+          screen opened — so nothing should move, and a slot animating to a
+          height it is already at is a frame of flicker on every launch. The
+          swap out of the morph container below is invisible because both are
+          the bar, at the bar's height, in the same place.
+        */
+        <MoodStatusBar
+          dogName={dog.name}
+          breed={breedDisplay(dog)}
+          value={answeredStep.value}
+          moodName={answeredStep.name}
+          solid={answeredStep.solid}
+          glyph={answeredStep.glyph}
+          onPress={() => router.push('/(tabs)/checkin')}
+        />
+      ) : (
       <Animated.View
-        // Measured once, then driven to 0 on collapse. `maxHeight` rather than
-        // `height` so the card is free to size itself normally beforehand —
-        // pinning a height up front would fight the text reflowing when the
-        // caption changes from the prompt to the confirmation.
+        style={[
+          pulseSlotHeight ? { height: pulseSlotHeight } : null,
+          // Only while moving — see `morphing`. Clipping at rest would cut the
+          // card's drop shadow off at its own edge.
+          morphing && styles.pulseClip,
+        ]}
+      >
+      <Animated.View
+        onLayout={measurePulse('ask')}
         style={{
-          maxHeight: pulseMeasured.current
-            ? pulseHeight.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, pulseMeasured.current],
-              })
-            : undefined,
-          opacity: pulseHeight.interpolate({
-            inputRange: [0, 0.6, 1],
-            outputRange: [0, 1, 1],
-          }),
-          overflow: 'hidden',
-        }}
-        onLayout={(e) => {
-          // Only ever grows: capturing a mid-collapse height would freeze the
-          // animation at whatever it had reached.
-          const h = e.nativeEvent.layout.height;
-          if (h > pulseMeasured.current) pulseMeasured.current = h;
+          opacity: morphStyles.askOpacity,
+          transform: [{ scale: morphStyles.askScale }],
         }}
       >
       <View style={styles.card}>
@@ -525,15 +720,13 @@ export default function HomeScreen() {
             const value = i + 1;
             return (
               <MoodFace
-                key={step.icon}
-                icon={step.icon}
+                key={step.name}
                 name={step.name}
                 tint={step.tint}
                 ink={step.ink}
                 solid={step.solid}
                 value={value}
                 active={checkin?.energy === value}
-                reaction={step.reaction}
                 onPress={() => void onPickEnergy(value)}
                 // Was "Opens the check-in form — nothing is recorded until you
                 // finish it", which stopped being true when the tap started
@@ -554,7 +747,44 @@ export default function HomeScreen() {
         </Text>
       </View>
       </Animated.View>
+
+      {/*
+        The bar the card is becoming, stacked on top of it.
+
+        Absolutely positioned, which is what lets it be MEASURED while still
+        invisible: an absolute child is laid out against the slot's width and
+        reports its height through onLayout without contributing to the
+        slot's own. Without that there would be nothing to tween the height
+        to, and the morph would have to guess.
+
+        Not interactive until it is the thing on screen — a bar at opacity 0
+        that still swallows taps would make the faces underneath it dead.
+      */}
+      {answeredStep ? (
+        <Animated.View
+          onLayout={measurePulse('bar')}
+          pointerEvents="none"
+          style={[
+            styles.pulseBarLayer,
+            {
+              opacity: morphStyles.barOpacity,
+              transform: [{ translateY: morphStyles.barLift }],
+            },
+          ]}
+        >
+          <MoodStatusBar
+            dogName={dog.name}
+            breed={breedDisplay(dog)}
+            value={answeredStep.value}
+            moodName={answeredStep.name}
+            solid={answeredStep.solid}
+              glyph={answeredStep.glyph}
+            onPress={() => router.push('/(tabs)/checkin')}
+          />
+        </Animated.View>
       ) : null}
+      </Animated.View>
+      )}
 
       {/*
         Placed ABOVE the recorder and below the daily pulse.
@@ -742,7 +972,9 @@ export default function HomeScreen() {
       <SectionRule label={recent.length > 1 ? 'Recent seizures' : 'Last seizure'} />
       {recent.length > 0 ? (
         <Card>
-          {recent.map((s, i) => (
+          {recent.map((s, i) => {
+            const clip = clipBySeizure.get(s.id);
+            return (
             <Pressable
               key={s.id}
               onPress={() => router.push(`/seizure-detail/${s.id}`)}
@@ -754,20 +986,35 @@ export default function HomeScreen() {
                 pressed && styles.pressed,
               ]}
             >
-              {/* The clip, when this seizure has one. A vet asks "did you get
-                  it on video" before anything else, so the answer belongs on
-                  the row rather than one tap further in. */}
-              {clipBySeizure.has(s.id) ? (
-                // A plain Image rather than <VideoTile>: the tile carries a
-                // duration pill and a "date entered by you" badge sized for a
-                // 150pt card, and at 44pt those overlap into an unreadable
-                // smudge. The row needs one thing said — there is footage —
-                // and the play glyph says it.
-                <View style={styles.recentThumbWrap} accessible={false}>
+              {/*
+                The clip, when this seizure has one — and it PLAYS.
+
+                A vet asks "did you get it on video" before anything else, so
+                the answer belongs on the row rather than one tap further in.
+                It used to be decoration: the whole row went to the seizure
+                detail, so a poster frame with a play triangle on it opened a
+                page of text instead. A play glyph has to play something.
+
+                Its own Pressable, nested. The row still opens the detail; the
+                thumbnail opens the footage. `hitSlop` is negative-free and
+                the tile is 48pt, so the two targets do not overlap.
+
+                A plain Image rather than <VideoTile>: that component carries
+                a duration pill and a "date entered by you" badge sized for a
+                150pt card, which at this size overlap into a smudge.
+              */}
+              {clip ? (
+                <Pressable
+                  onPress={() => router.push(`/video/${clip.video.id}`)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Play the video of this seizure"
+                  style={({ pressed }) => [
+                    styles.recentThumbWrap,
+                    pressed && styles.pressed,
+                  ]}
+                >
                   <Image
-                    source={{
-                      uri: thumbnailUri(clipBySeizure.get(s.id)!.video.thumbUri),
-                    }}
+                    source={{ uri: thumbnailUri(clip.video.thumbUri) }}
                     style={styles.recentThumb}
                     resizeMode="cover"
                   />
@@ -778,26 +1025,35 @@ export default function HomeScreen() {
                       <Icon name="play" size="sm" color={colors.onMedia} filled />
                     </View>
                   </View>
-                </View>
+                </Pressable>
               ) : null}
+
               <View style={styles.flexOne}>
-                <Body style={styles.semibold}>
-                  {[
-                    new Date(s.start).toLocaleDateString(undefined, {
+                {/*
+                  Date bold, time quiet, on one line. It was one uniform
+                  string — "8 Sep, 02:43" — which gives a column of five rows
+                  no scanning order at all: every row looked like every other
+                  and the eye had to read each one. The day is what somebody
+                  is looking for; the clock time qualifies it.
+                */}
+                <Text style={styles.recentWhen} numberOfLines={1}>
+                  <Text style={styles.recentDate}>
+                    {new Date(s.start).toLocaleDateString(undefined, {
                       month: 'short',
                       day: 'numeric',
-                    }),
-                    // Omitted entirely when the owner never gave a time — the
-                    // stored midnight is a sentinel, not an observation.
-                    timeOfDay(s.start, hasKnownTime(s.timingConfidence)),
-                  ]
-                    .filter(Boolean)
-                    .join(', ')}
-                </Body>
+                    })}
+                  </Text>
+                  {/* Omitted entirely when the owner never gave a time — the
+                      stored midnight is a sentinel, not an observation. */}
+                  {timeOfDay(s.start, hasKnownTime(s.timingConfidence))
+                    ? `  ·  ${timeOfDay(s.start, hasKnownTime(s.timingConfidence))}`
+                    : ''}
+                </Text>
                 <Muted numberOfLines={1} style={styles.recentObs}>
                   {s.ictalObs.slice(0, 3).join(', ') || 'No observations logged'}
                 </Muted>
               </View>
+
               <Pill
                 // Absence of a duration, not low confidence in one — see the
                 // note in seizure-detail. The tone still keeps an owner-stated
@@ -813,8 +1069,17 @@ export default function HomeScreen() {
                     : 'teal'
                 }
               />
+              {/*
+                The row opens something, and nothing said so. Every other
+                navigable row in this app ends in a chevron; these five ended
+                at a duration pill floating against the card's edge, which
+                read as the end of a data line rather than the edge of a
+                control.
+              */}
+              <Icon name="chevron" size="sm" color={colors.inkSoft} />
             </Pressable>
-          ))}
+            );
+          })}
         </Card>
       ) : (
         <Card>
@@ -1053,13 +1318,45 @@ function VideoCard({ entry, onPress }: { entry: GalleryEntry; onPress: () => voi
 const VIDEO_CARD_WIDTH = 150;
 
 const styles = StyleSheet.create({
+  /**
+   * Clipping for the morph, applied only while it plays.
+   *
+   * The asking card is taller than the bar, so as the slot shrinks past it
+   * the overflow has to be cut — otherwise the card's lower half spills over
+   * the recorder beneath while it fades. At rest this must be OFF: it would
+   * clip the card's own drop shadow flush with its edge and flatten it.
+   */
+  pulseClip: { overflow: 'hidden' },
+  /**
+   * The status bar during the morph, stacked over the card it replaces.
+   *
+   * `left`/`right` rather than a width, so it inherits the slot's own width
+   * and its onLayout reports a height measured at the size it will really be.
+   */
+  pulseBarLayer: { position: 'absolute', left: 0, right: 0, top: 0 },
   recentRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.sm,
+    // `sm`, not `md`: the row now ends in a pill AND a chevron, and at 14pt
+    // those two drifted apart far enough to read as unrelated things.
+    gap: spacing.sm,
+    // Taller than it was. Five two-line rows at 8pt vertical padding is a
+    // dense block of text with no air in it.
+    paddingVertical: spacing.md - 2,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
+  },
+  /** The date does the scanning work; the clock time only qualifies it. */
+  recentWhen: {
+    fontSize: fontSize.base,
+    color: colors.inkSoft,
+    fontFamily: fontFamily.regular,
+  },
+  recentDate: {
+    fontSize: fontSize.base,
+    fontWeight: '700',
+    color: colors.ink,
+    fontFamily: fontFamily.bold,
   },
   recentRowLast: { borderBottomWidth: 0, paddingBottom: 0 },
   // Fixed square so rows with and without a clip keep the same rhythm; the
@@ -1068,8 +1365,10 @@ const styles = StyleSheet.create({
   // box into a circle, which reads as an avatar of the dog rather than as a
   // still from a clip.
   recentThumbWrap: {
-    width: 44,
-    height: 44,
+    // 48, matching MIN_TOUCH_TARGET: this is its own button now — it opens
+    // the footage — so it has to be a real target, not a 44pt decoration.
+    width: MIN_TOUCH_TARGET,
+    height: MIN_TOUCH_TARGET,
     borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: colors.line,

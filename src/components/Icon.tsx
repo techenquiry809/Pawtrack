@@ -59,31 +59,6 @@ const GLYPHS = {
   // cluster banner, which IS an alarm.
   warning: ['alert-circle-outline', 'alert-circle'],
 
-  /*
-   * The five steps of the energy scale.
-   *
-   * These used to be sad → happy smileys, which had two problems. Ionicons
-   * ships only two face shapes, so the middle three were carried by fill and a
-   * neutral dash — a scale of five where three steps were the same drawing.
-   * And a smiley asks "what mood are you in", which is not the question: an
-   * owner is not rating their dog's happiness, they are reporting how the
-   * animal MOVED today, because that is the observation a vet can use.
-   *
-   * So the scale is now a dog's day, in the owner's own vocabulary:
-   *
-   *   flat out on the floor → mooching about → an ordinary day
-   *   → up for a walk → zoomies
-   *
-   * Five genuinely distinct glyphs, all from Ionicons, all colourable and
-   * sized from the same tokens as everything else — which is exactly why this
-   * did not become emoji. See the note at the top of this file.
-   */
-  energy1: ['bed-outline', 'bed'],
-  energy2: ['footsteps-outline', 'footsteps'],
-  energy3: ['paw-outline', 'paw'],
-  energy4: ['walk-outline', 'walk'],
-  energy5: ['tennisball-outline', 'tennisball'],
-
   profile: ['paw-outline', 'paw'],
   emergency: ['medkit-outline', 'medkit'],
   medication: ['medical-outline', 'medical'],
@@ -103,6 +78,13 @@ const GLYPHS = {
   // Points the opposite way to `chevron`, which marks "go deeper" on nav rows.
   // The two must not be the same glyph or the direction stops meaning anything.
   back: ['chevron-back', 'chevron-back'],
+  // Privacy and security: the consent screen's data point, and the app
+  // lock. Not a "you cannot do this" glyph — nothing in the app is gated on
+  // being signed in any more, because signing in is required to reach it.
+  lock: ['lock-closed-outline', 'lock-closed'],
+  // Affirmation: a ticked checkbox, a completed step. Distinct from `record`
+  // (an action) and from `chevron` (navigation) — this one means "yes, done".
+  check: ['checkmark', 'checkmark'],
 } as const;
 
 export type IconName = keyof typeof GLYPHS;

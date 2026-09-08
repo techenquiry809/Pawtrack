@@ -52,6 +52,20 @@ export type AuthErrorNotice = {
    * the fault is ours.
    */
   retryable: boolean;
+  /**
+   * Set only for "the code you typed was refused".
+   *
+   * Lets a screen render this one case at a different weight. /verify shows it
+   * as a single line under the boxes rather than as the full amber card: a
+   * mistyped digit is the commonest and most recoverable thing that happens
+   * there, and giving it the same panel as a mail-server outage makes the
+   * screen shout at someone who simply needs to look at their email again.
+   *
+   * Deliberately a FLAG rather than the screen matching on the title. Copy
+   * gets reworded; a match on it fails silently the first time it does, and
+   * fails by showing the wrong thing rather than by not compiling.
+   */
+  kind?: 'code-rejected';
 };
 
 /** Pulls a `code` off an unknown throwable without assuming its shape. */
@@ -115,6 +129,9 @@ export function isCancellation(e: unknown): boolean {
   );
 }
 
+/** Which screen the message will appear on. See describeAuthError. */
+export type AuthContext = 'sign-in' | 'sign-up';
+
 const PROVIDER_NAME: Record<AuthProvider, string> = {
   apple: 'Apple',
   google: 'Google',
@@ -130,6 +147,16 @@ const PROVIDER_NAME: Record<AuthProvider, string> = {
 export function describeAuthError(
   e: unknown,
   provider: AuthProvider,
+  /**
+   * Which flow the owner is actually in.
+   *
+   * Without this every message said "sign in", including the ones shown on
+   * the CREATE ACCOUNT screen — so a failed signup was reported as "Could not
+   * sign in with Email. …You can try again, or use email and password", to
+   * someone who was signing up, with email and password. Three wrong things
+   * in two sentences.
+   */
+  context: AuthContext = 'sign-in',
 ): AuthErrorNotice | null {
   if (isCancellation(e)) return null;
 
@@ -221,20 +248,109 @@ export function describeAuthError(
     };
   }
 
+  // Supabase's verifyOtp error for a wrong or stale code. Named separately
+  // from "Anything else" below because the fix is specific — a fresh code —
+  // not the generic "try again" the fallback offers.
+  /*
+   * OUR MAIL DID NOT GO OUT.
+   *
+   * GoTrue reports a failed send as a 500 with "Error sending confirmation
+   * email" / "Error sending recovery email" and no further detail. Without
+   * this branch it fell through to the generic fallback below and became
+   * "something went wrong and the app could not say what" — which was doubly
+   * unhelpful, because the app CAN say what: no email is coming, so there is
+   * no point watching an inbox.
+   *
+   * Naming it does not leak whether the address has an account: GoTrue
+   * answers an unknown address with a silent 200 and never reaches this
+   * branch, so it only ever fires when our own mail delivery is broken.
+   */
+  if (m.includes('error sending')) {
+    const what = m.includes('recovery') ? 'reset code' : 'confirmation code';
+    return {
+      title: `Could not send your ${what}`,
+      body:
+        `Something went wrong on our side and the email was not sent, so no ${what} is coming. ` +
+        'Please try again in a moment — if it keeps happening, contact support.',
+      retryable: true,
+    };
+  }
+
+  if (m.includes('token') && (m.includes('expired') || m.includes('invalid'))) {
+    return {
+      title: 'That code didn’t work',
+      body: 'It may be wrong or may have expired. Check your email for the most recent code, or send a new one.',
+      retryable: true,
+      kind: 'code-rejected',
+    };
+  }
+
   /* --- Anything else ------------------------------------------------- */
 
   // A message we wrote ourselves is already owner-facing (see the password
   // paths in authStore), so it is shown as-is rather than replaced with
   // something vaguer. Ours are sentences; SDK codes are not.
   const looksHumanWritten = /^[A-Z].*[.!?]$/.test(raw.trim()) && !raw.includes('_');
+  const action = context === 'sign-up' ? 'create your account' : 'sign in';
+
   if (looksHumanWritten) {
-    return { title: 'Could not sign in', body: raw.trim(), retryable: true };
+    return { title: `Could not ${action}`, body: raw.trim(), retryable: true };
+  }
+
+  /*
+   * The last resort. Two things it must NOT do any more:
+   *
+   *   - Tell someone using email and password to "use email and password".
+   *     That advice only makes sense as a fallback FROM Apple or Google, so
+   *     it is now offered only when there is somewhere else to fall back to.
+   *   - Claim "your records are safe on this phone". That was true when an
+   *     account was optional and local records existed before sign-in. An
+   *     account is required now, so on this screen there are usually no
+   *     records yet and the reassurance is about nothing.
+   */
+  if (provider === 'password') {
+    return {
+      title: `Could not ${action}`,
+      body: 'Something went wrong and the app could not say what. Please check your connection and try again.',
+      retryable: true,
+    };
   }
 
   return {
-    title: `Could not sign in with ${name}`,
+    title: `Could not ${action} with ${name}`,
     body:
-      'Something went wrong and the app could not say what. Your records are safe on this phone. You can try again, or use email and password.',
+      'Something went wrong and the app could not say what. You can try again, or use email and password instead.',
     retryable: true,
   };
+}
+
+/**
+ * Did signUp() just refuse an address that already has a CONFIRMED account?
+ *
+ * ── THE RESPONSE THIS READS ───────────────────────────────────────────
+ *
+ * With email confirmation required, GoTrue does NOT return an error for an
+ * existing confirmed email. It returns 200 with a user-shaped object, on
+ * purpose, so the endpoint cannot be used to enumerate accounts. The only
+ * thing separating that obfuscated user from a real new signup is
+ * `identities`: a genuine signup carries one, this carries an empty array.
+ *
+ * ── WHY THE CHECK IS THIS PEDANTIC ────────────────────────────────────
+ *
+ * `!user.identities?.length` is the obvious spelling and it is wrong in the
+ * dangerous direction. `identities` is optional in the SDK's type and is
+ * absent — not empty — on some responses, so the short form fires on a shape
+ * that merely omitted the field and refuses a legitimate signup with "you
+ * already have an account", locking a new owner out of creating one.
+ *
+ * So: an ARRAY, and empty. Absent means "no information", which is not the
+ * same answer and must fall through to the normal path.
+ *
+ * Pure and exported so the discriminator can be tested against recorded
+ * response shapes without standing up an auth server.
+ */
+export function isExistingAccountSignUp(user: unknown): boolean {
+  if (typeof user !== 'object' || user === null) return false;
+  const identities = (user as { identities?: unknown }).identities;
+  return Array.isArray(identities) && identities.length === 0;
 }

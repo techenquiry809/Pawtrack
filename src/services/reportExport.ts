@@ -22,10 +22,29 @@
  * The same split, for the same reason, as `mediaExport.ts`:
  *
  *   shareReport()  "I want to send this."   → the OS share sheet
- *   saveReport()   "I want to keep this."   → the Files app / Downloads
+ *   saveReport()   "I want to keep this."   → a folder on the phone
  *
  * An owner with only the share sheet cannot file a report for themselves; an
  * owner with only Save cannot email their vet. The report screen offers both.
+ *
+ * ── SAVING IS NOT THE SAME ACT ON THE TWO PLATFORMS ───────────────────
+ *
+ * Android has a real answer: the Storage Access Framework. The owner picks a
+ * folder, the file is written into it, and the confirmation can name the place
+ * it went — `Download`, `Documents/Vet`. Nothing is copied through the share
+ * sheet and no storage permission is requested, because SAF grants access to
+ * exactly the one folder they chose and nothing else.
+ *
+ * iOS has no equivalent an app may call. `UIDocumentPickerViewController` in
+ * export mode is not exposed by Expo, and the alternative — setting
+ * `UIFileSharingEnabled` so the app's Documents folder appears in Files — was
+ * rejected outright: it would publish the seizure DATABASE and the video files
+ * next to the report. A vet report is worth exporting; the medical record of a
+ * sick animal is not worth leaving open in a file browser to get it there.
+ *
+ * So on iOS, Save opens the share sheet, where "Save to Files" is the first
+ * destination. It is the same sheet Send opens, and the labels are the honest
+ * difference: the button says which half of the sheet the owner wants.
  *
  * ── WHAT THIS DELIBERATELY DOES NOT DO ────────────────────────────────
  *
@@ -38,6 +57,16 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { File, Paths } from 'expo-file-system';
+// The SAF namespace has no equivalent in the current expo-file-system API —
+// `File`/`Directory` address the app's own sandbox, and a folder the owner
+// picked is by definition outside it. `expo-file-system/legacy` is the
+// supported entry point for it in SDK 57, not a deprecated one.
+import {
+  StorageAccessFramework as SAF,
+  readAsStringAsync,
+  writeAsStringAsync,
+} from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 
 import type { Dog } from '@/types/domain';
 import { breedDisplay } from '@/db/dogRepo';
@@ -54,14 +83,17 @@ import {
   resolveRange,
   type ReportScope,
 } from '@/features/report/range';
+import { folderLabel } from '@/features/report/saveLocation';
 
 /**
- * Reuses the union `mediaExport` already returns, rather than inventing a
- * second result vocabulary for the same three outcomes. The report screen and
- * the video gallery can then report success and failure identically.
+ * The same vocabulary `mediaExport` returns, with one word changed: a video is
+ * saved to an `album`, a PDF to a folder, and calling a folder an album in the
+ * confirmation would send the owner to the Photos app for a file that is not
+ * there. Everything else lines up, so the two screens still report failure
+ * identically.
  */
 export type ExportOutcome =
-  | { status: 'saved'; album: string }
+  | { status: 'saved'; location: string }
   | { status: 'shared' }
   | { status: 'cancelled' }
   | { status: 'denied'; message: string }
@@ -150,14 +182,47 @@ export async function shareReport(report: BuiltReport): Promise<ExportOutcome> {
 }
 
 /**
- * Save a copy the owner keeps.
- *
- * Routed through the share sheet rather than a direct filesystem write, which
- * looks like a detour and is not: the share sheet is the ONLY way an app can
- * put a file into the user's own Files / Drive storage on iOS without asking
- * for far broader permissions than a PDF export can justify. "Save to Files"
- * is an option inside that sheet.
+ * Save a copy the owner keeps — into a folder they pick on Android, through
+ * "Save to Files" on iOS. See the header note on why the two differ.
  */
 export async function saveReport(report: BuiltReport): Promise<ExportOutcome> {
-  return shareReport(report);
+  if (Platform.OS !== 'android') return shareReport(report);
+
+  let directoryUri: string;
+  try {
+    const permission = await SAF.requestDirectoryPermissionsAsync();
+    // Backing out of the folder picker is a decision, not a failure. It gets
+    // no alert — the owner knows what they just did.
+    if (!permission.granted) return { status: 'cancelled' };
+    directoryUri = permission.directoryUri;
+  } catch (e) {
+    console.error('[report] folder picker failed', e);
+    return {
+      status: 'denied',
+      message: 'The folder picker could not be opened. Please try again.',
+    };
+  }
+
+  try {
+    // Read then write, rather than a copy: `copyAsync` takes a SAF URI as its
+    // source but only a file:// URI as its destination, so there is no direct
+    // route into a folder the owner picked. The report is HTML text with no
+    // embedded images, so the base64 round trip is tens of kilobytes.
+    const base64 = await readAsStringAsync(report.uri, { encoding: 'base64' });
+
+    // createFileAsync appends the extension itself, from the MIME type. Given
+    // 'PawTrack-Lucy-2026-08-30.pdf' it would produce '….pdf.pdf'.
+    const stem = report.fileName.replace(/\.pdf$/i, '');
+    const target = await SAF.createFileAsync(directoryUri, stem, 'application/pdf');
+
+    await writeAsStringAsync(target, base64, { encoding: 'base64' });
+    return { status: 'saved', location: folderLabel(directoryUri) };
+  } catch (e) {
+    console.error('[report] save failed', e);
+    return {
+      status: 'denied',
+      message:
+        'The report could not be written to that folder. Check that your phone has free storage, or try a different folder.',
+    };
+  }
 }

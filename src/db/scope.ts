@@ -20,17 +20,24 @@
  * this phone" — which also deletes the video FILES, because those exist
  * nowhere else. See src/services/sync/localData.ts.
  *
- * ── THE THREE STATES ──────────────────────────────────────────────────
+ * ── THE STATES, NOW THAT AN ACCOUNT IS REQUIRED ───────────────────────
  *
- *   signed out       user_id IS NULL   rows not yet claimed by any account
- *   signed in as U   user_id = 'U'     that account's rows
- *   (never)          both              see below
+ *   signed in as U   user_id = 'U'     that account's rows — the only state
+ *                                      in which the app is reachable at all
+ *   user_id IS NULL                    rows written before accounts were
+ *                                      required; see below
  *
- * Unclaimed rows are deliberately NOT visible to a signed-in user. They become
- * visible by being CLAIMED, which is a decision the owner makes once, with the
- * two dogs named in front of them — see src/services/sync/claim.ts. Silently
- * folding stray rows into whoever signs in next is how one account ends up
- * holding another animal's seizure history.
+ * Signing in is now the first thing the app does (app/_layout.tsx), so nothing
+ * NEW is ever written unowned. Rows with a NULL owner exist only on phones
+ * that used the app before that change, and they are handed to the first
+ * account that signs in there — see adoptOrphanedLocalData() in
+ * src/services/sync/claim.ts. They stay invisible until that happens, which is
+ * why the adoption runs on the session event rather than being left to chance.
+ *
+ * `ownerScope()` still emits an `IS NULL` predicate for the signed-out case.
+ * That branch is not dead: it is what the adoption path and any read taken
+ * during sign-out resolve to, and making it throw instead would turn an
+ * ordinary transient state into a crash.
  */
 
 /**
@@ -67,9 +74,13 @@ export function ownerScope(alias?: string): Scope {
 /**
  * The owner to stamp on a NEW row.
  *
- * Null while signed out, which is correct and is what the claim flow later
- * resolves. A row written offline before anyone has signed in is not
- * ownerless by accident; it is ownerless because nobody has said who owns it.
+ * Null while signed out. In practice that no longer happens for a real write:
+ * every screen that creates a record sits behind the route gate, and the gate
+ * sends a signed-out session to sign-in before any of them render. The null
+ * branch remains because a store can legitimately be read mid-transition, and
+ * a row stamped NULL is recoverable by the adoption path — whereas throwing
+ * here would lose the write outright, which on this dataset means losing a
+ * seizure.
  */
 export function newRowOwner(): string | null {
   return activeUserId;

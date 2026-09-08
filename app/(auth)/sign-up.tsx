@@ -1,32 +1,4 @@
-/**
- * Create an account.
- *
- * ── HOW MUCH THIS ASKS FOR, AND WHY NOT MORE ──────────────────────────
- *
- * Name, email and password are required. Phone and emergency contact are
- * optional and labelled as such.
- *
- * This app already holds a dog's seizure history, which is sensitive on its
- * own and becomes far more so once it is attached to a named, reachable
- * person. Every additional field is one more thing to lose in a breach and one
- * more thing to hand over under a data request, so the bar for adding one is
- * that the app would be worse without it.
- *
- * The emergency contact clears that bar: this is a seizure app, and "who else
- * can help with this dog" is genuinely useful on a bad night. A postal
- * address, a date of birth or a job title would not, which is why they are not
- * here.
- *
- * ── WHERE THE DETAILS ACTUALLY GO ─────────────────────────────────────
- *
- * Into `public.profiles`, under RLS — not into user_metadata, which is
- * user-editable and therefore unsafe for anything a decision reads. When the
- * project requires email confirmation there is no session yet and no row can
- * be written, so the values ride along in `options.data` and are reconciled on
- * first sign-in. See authStore.
- */
-
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -42,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Heading, Muted, Title } from '@/components/ui';
 import { AuthField } from '@/components/AuthField';
+import { PasswordStrength } from '@/components/PasswordStrength';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { BackButton } from '@/components/BackButton';
 import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
@@ -60,6 +33,8 @@ export default function SignUpScreen() {
   const error = useAuthStore((s) => s.error);
   const awaitingConfirmation = useAuthStore((s) => s.awaitingConfirmation);
   const signUpWithPassword = useAuthStore((s) => s.signUpWithPassword);
+  const existingAccountEmail = useAuthStore((s) => s.existingAccountEmail);
+  const clearExistingAccount = useAuthStore((s) => s.clearExistingAccount);
   const setError = useAuthStore((s) => s.setError);
 
   const [fullName, setFullName] = useState('');
@@ -70,6 +45,18 @@ export default function SignUpScreen() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [errors, setErrors] = useState<Errors>({});
+  /*
+   * The code box is not here any more — it is /verify, which serves this flow
+   * and the password reset alike. Signup's job ends the moment the account is
+   * created; asking for the code is a separate instruction and gets a separate
+   * screen. `replace`, not `push`: this form has done its work and coming back
+   * to it would only offer a second "Create account" for an address that now
+   * has one, which fails with "User already registered".
+   */
+  useEffect(() => {
+    if (!awaitingConfirmation) return;
+    router.replace({ pathname: '/verify', params: { mode: 'signup' } });
+  }, [awaitingConfirmation]);
 
   const clear = (key: keyof Errors) =>
     setErrors((e) => ({ ...e, [key]: undefined }));
@@ -105,12 +92,22 @@ export default function SignUpScreen() {
     });
   };
 
-  /* ---- Confirmation state -------------------------------------------
-   * A terminal state, not a step. Nothing else can happen until the link is
-   * clicked, so the form is replaced rather than left behind it — leaving a
-   * live "Create account" button under this message invites a second attempt
-   * that fails with "User already registered". */
-  if (awaitingConfirmation) {
+  /* ---- Already registered -------------------------------------------
+   * A TERMINAL state for this address, and deliberately NOT a code screen.
+   *
+   * Supabase answers an existing confirmed email with a success-shaped
+   * response carrying no identities (see signUpWithPassword). Reading that as
+   * success is what used to put "we've sent you a 6-digit code" in front of
+   * someone whose address was never sent one — a screen with no way forward,
+   * because the code cannot arrive.
+   *
+   * The form is replaced rather than left underneath: a live "Create account"
+   * button here just invites the same dead end again. This one stays on this
+   * screen rather than routing away, because unlike a pending confirmation
+   * there is no next step to send anyone to — the answer is "you already have
+   * one", and the two ways out are both right here.
+   */
+  if (existingAccountEmail) {
     return (
       <View style={styles.screen}>
         <LinearGradient
@@ -124,27 +121,44 @@ export default function SignUpScreen() {
             styles.content,
             { paddingTop: insets.top + spacing.xl },
           ]}
+          keyboardShouldPersistTaps="handled"
         >
           <View style={styles.card}>
-            <Heading>Confirm your email</Heading>
+            <Heading>You already have an account</Heading>
             <Body style={styles.cardBody}>
-              We&rsquo;ve sent a link to{' '}
-              <Text style={styles.strong}>{awaitingConfirmation}</Text>. Open it
-              on this phone, then sign in.
+              <Text style={styles.strong}>{existingAccountEmail}</Text> is
+              already registered. Sign in with your password instead — your
+              dog&rsquo;s records are waiting in that account.
             </Body>
-            <Muted style={styles.cardBody}>
-              Nothing you record before then is lost — your records are saved on
-              this phone and are added to your account when you sign in.
-            </Muted>
+
             <Button
-              label="Back to sign in"
-              onPress={() => router.replace('/sign-in')}
+              label="Sign in instead"
+              onPress={() => {
+                clearExistingAccount();
+                router.replace('/sign-in');
+              }}
             />
+
+            <Button
+              label="Use a different email"
+              variant="ghost"
+              onPress={() => {
+                clearExistingAccount();
+                setEmail('');
+              }}
+            />
+
+            <Muted style={styles.cardBody}>
+              Forgotten the password? Choose &ldquo;Sign in instead&rdquo; —
+              you can reset it from there. Nothing you have recorded on this
+              phone is lost either way.
+            </Muted>
           </View>
         </ScrollView>
       </View>
     );
   }
+
 
   return (
     <View style={styles.screen}>
@@ -189,7 +203,15 @@ export default function SignUpScreen() {
                 setFullName(v);
                 clear('fullName');
               }}
-              placeholder="Sam Karki"
+              /*
+                A conventional placeholder name, not a real one.
+                This read "Sam Karki" — a specific, identifiable person, which
+                on a signup form reads as a value already filled in rather
+                than as an example. "Jane Smith" is the standing convention
+                for exactly this, in the same spirit as `you@example.com` in
+                the field below: recognisably a stand-in, and nobody's.
+              */
+              placeholder="Jane Smith"
               autoCapitalize="words"
               autoComplete="name"
               textContentType="name"
@@ -203,6 +225,10 @@ export default function SignUpScreen() {
               onChangeText={(v) => {
                 setEmail(v);
                 clear('email');
+                // The panel below is about ONE address. Leaving it up while
+                // the owner types a different one would answer a question
+                // they are no longer asking.
+                if (existingAccountEmail) clearExistingAccount();
               }}
               placeholder="you@example.com"
               keyboardType="email-address"
@@ -229,6 +255,9 @@ export default function SignUpScreen() {
               error={errors.password}
               editable={!busy}
             />
+            {/* Feedback only — see validate() above. The account can still be
+                created on length alone; this never blocks submission. */}
+            {password.length > 0 && <PasswordStrength value={password} />}
 
             <AuthField
               label="Confirm password"
@@ -260,7 +289,20 @@ export default function SignUpScreen() {
               hint="optional"
               value={phone}
               onChangeText={setPhone}
-              placeholder="+977 98…"
+              /*
+                A 555 number, which is the North American range reserved for
+                exactly this — it cannot ring a real person, however it is
+                dialled. The previous hint was a Nepali +977 prefix, which
+                left the form suggesting a country most of its readers are not
+                in, next to an American example name.
+
+                The field itself accepts anything: this is a shape, not a
+                format the app enforces. Nothing here parses a phone number —
+                it is stored as typed and dialled as typed, so an owner
+                outside the US who writes their own country code is not
+                fighting a validator that only knows one.
+              */
+              placeholder="+1 555 010 0199"
               keyboardType="phone-pad"
               autoComplete="tel"
               textContentType="telephoneNumber"
@@ -284,7 +326,8 @@ export default function SignUpScreen() {
               hint="optional"
               value={contactPhone}
               onChangeText={setContactPhone}
-              placeholder="+977 98…"
+              // Same 555 range as the field above; see the note there.
+              placeholder="+1 555 010 0199"
               keyboardType="phone-pad"
               autoComplete="off"
               textContentType="none"
@@ -362,6 +405,7 @@ const styles = StyleSheet.create({
   cardBody: { lineHeight: 21 },
   optionalNote: { marginTop: 2 },
   strong: { fontWeight: '700', color: colors.ink, fontFamily: fontFamily.bold },
+
 
   footer: {
     flexDirection: 'row',

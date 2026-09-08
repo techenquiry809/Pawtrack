@@ -28,6 +28,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 
 import { Body, Button, Card, Heading, Muted, Pill } from '@/components/ui';
 import { CheckinCalendar } from '@/components/CheckinCalendar';
+import { TodaysDoses } from '@/components/TodaysDoses';
 import { Icon } from '@/components/Icon';
 import { colors, fontFamily, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import * as checkinRepo from '@/db/checkinRepo';
@@ -100,6 +101,16 @@ export function CheckinSection({ dogId, dogName }: { dogId: string; dogName: str
           style={styles.startBtn}
         />
       </Card>
+
+      {/*
+        Today's doses, directly under today's check-in.
+
+        They were on the Medication tab, repeated once per drug. This is the
+        screen the daily ritual happens on, so the daily medication belongs
+        here — one list, in clock order. It renders nothing at all when no
+        medication is prescribed. See components/TodaysDoses.tsx.
+      */}
+      <TodaysDoses dogId={dogId} />
 
       <Card>
         <Pressable

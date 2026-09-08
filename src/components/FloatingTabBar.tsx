@@ -50,7 +50,7 @@ import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Icon, type IconName } from '@/components/Icon';
 import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
-import { useChromeMetrics } from '@/theme/chrome';
+import { RECORD_OVERHANG, useChromeMetrics } from '@/theme/chrome';
 import { useGlassSupport } from '@/theme/glass';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
@@ -81,6 +81,31 @@ const CHROME_INK = '#414A5A';
  */
 const GLYPH_SLOT = 38;
 
+/**
+ * The Record disc, one step up from the glyph slot rather than a size class
+ * above it.
+ *
+ * 46 against the 38 the other four columns get — about a fifth larger, enough
+ * to read as "not one of the four" without the bar becoming a frame around a
+ * button. Two larger versions were tried and both failed the same way: at 56
+ * the disc took the eye before the labels did, and at 76 (big enough to crest
+ * both edges of the bar) it covered the strip the word "Record" lives on.
+ *
+ * Rendered OUTSIDE the island's clip so its top can crest the bar's edge; see
+ * RECORD_OVERHANG.
+ */
+const RECORD_DISC = 46;
+
+/**
+ * How far the dock's box extends above the island.
+ *
+ * Purely a hit-testing allowance: the disc is drawn outside the island, and a
+ * child rendered outside its parent's frame receives no touches on iOS — the
+ * emergency button would have had a dead top edge that looked entirely
+ * normal. The +2 is slack against rounding.
+ */
+const DOCK_PAD = RECORD_OVERHANG + 2;
+
 /** The reference dock's spring, as Animated.spring parameters. */
 /**
  * Damping dropped from 12 to 10 so the spring settles with a small overshoot
@@ -91,17 +116,19 @@ const GLYPH_SLOT = 38;
 const SPRING = { mass: 0.1, stiffness: 150, damping: 10, useNativeDriver: true };
 
 /**
- * The press ring, matching the shared Button's port of shadcn's
- * `outline-2 outline-offset-2 outline-ring/70`.
+ * There is deliberately NO press ring.
  *
- * The bar already had the dock's scale spring; this adds the ring that goes
- * with it on the reference button, so a tab and a Button answer a finger the
- * same way. It hugs the active pill's geometry rather than the whole column —
- * the column is 1/5th of the screen and a ring around all of it would read as
- * a selection box, not a glow.
+ * A tab used to draw an outline around its pill on press-in, ported from the
+ * shared Button. On a Button, pressed once, it reads as a focus ring. On a
+ * nav bar it does not: these five controls get pressed constantly, often
+ * repeatedly and quickly, and a hard-edged circle flashing in and out under
+ * the thumb reads as a rendering artefact rather than as feedback — it is the
+ * one thing people asked about after using the bar.
+ *
+ * The press is still answered, by the scale spring the dock already had. That
+ * is motion attached to the object itself, which is legible at a glance and
+ * does not leave an outline behind on the fifth rapid tap.
  */
-const RING_WIDTH = 2;
-const RING_OFFSET = 2;
 
 /** Magnification falloff by distance from the active tab, in tab positions. */
 const SCALE_BY_DISTANCE = [1.18, 1.06, 1.0];
@@ -267,6 +294,10 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
           </View>
         </View>
       </View>
+
+      {/* Outside the island, so its top edge is not clipped. Last, so it
+          draws over the bar rather than under it. */}
+      <RecordDisc islandHeight={islandHeight} />
     </View>
   );
 }
@@ -310,15 +341,19 @@ function withRecordSlot(tabs: ReactNode[]): ReactNode[] {
  * emergency and buys nothing. An accidental tap is recoverable — the live
  * screen offers Discard, and a discarded record is soft-deleted, not lost.
  */
-function RecordTabButton() {
+/**
+ * Starting a seizure, as one handler shared by the two things that trigger it.
+ *
+ * The disc and the column beneath it are separate Pressables — see
+ * RecordDisc — and they must not be able to disagree about what a press does.
+ */
+function useStartSeizure(): () => void {
   const router = useRouter();
   const dog = useActiveDog();
   const settings = useAppStore((s) => s.settings);
   const startSeizure = useActiveSeizure((s) => s.start);
-  const press = useRef(new Animated.Value(1)).current;
-  const glow = useRef(new Animated.Value(0)).current;
 
-  const onPress = () => {
+  return () => {
     if (!dog) return;
     if (settings.hapticsEnabled) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -326,41 +361,80 @@ function RecordTabButton() {
     startSeizure(dog.id);
     router.push('/seizure/live');
   };
+}
+
+/**
+ * The middle column: the word "Record", and a full-height touch target.
+ *
+ * The disc itself is NOT in here. It is rendered outside the island so it can
+ * stand past the bar's top edge, which the island's `overflow: hidden` would
+ * otherwise slice flat. What stays is the label and the column's own touch
+ * area — 1/5th of the screen width, which is the target that matters when
+ * somebody is reaching for this one-handed during a seizure. Losing it and
+ * leaving only the disc would have made the button smaller to the finger at
+ * the same time as making it bigger to the eye.
+ */
+function RecordTabButton() {
+  const onPress = useStartSeizure();
 
   return (
     <Pressable
       onPress={onPress}
-      onPressIn={() => {
-        Animated.spring(press, { toValue: 0.9, ...SPRING }).start();
-        Animated.spring(glow, { toValue: 1, ...SPRING }).start();
-      }}
-      onPressOut={() => {
-        Animated.spring(press, { toValue: 1, ...SPRING }).start();
-        Animated.spring(glow, { toValue: 0, ...SPRING }).start();
-      }}
       accessibilityRole="button"
       accessibilityLabel="Record seizure"
       accessibilityHint="Starts the seizure timer immediately"
-      // The whole slot is the target, so the 42pt disc below is only what the
-      // eye sees — the finger gets the full height and width of the column.
       style={styles.tab}
     >
-      <View style={styles.glyphSlot}>
-        <Animated.View style={[styles.recordDisc, { transform: [{ scale: press }] }]}>
-          <Icon name="record" size="md" color={colors.onMedia} filled />
-        </Animated.View>
-        {/* Ring rides the disc's own scale so it stays concentric while pressed. */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.recordRing,
-            { opacity: Animated.multiply(glow, 0.7), transform: [{ scale: press }] },
-          ]}
-        />
-      </View>
+      {/* Empty, and the same height as the other columns' glyphs: it is the
+          hole the floating disc sits in, and it keeps this column's label on
+          the same baseline as the other four. */}
+      <View style={styles.glyphSlot} />
       <Text style={styles.recordLabel} numberOfLines={1}>
         Record
       </Text>
+    </Pressable>
+  );
+}
+
+/**
+ * The disc, rendered over the island rather than inside it.
+ *
+ * ── WHY IT IS NOT A CHILD OF THE BAR ──────────────────────────────────
+ *
+ * The island clips to its own rounded rectangle — it has to, or the blur
+ * would square off its corners — and anything inside it that reaches past the
+ * top edge comes back with a flat cut across it. So the disc is a sibling of
+ * the island inside the dock, positioned from the dock's bottom so that
+ * RECORD_OVERHANG of it stands proud.
+ *
+ * The dock is `pointerEvents="box-none"`, so this stays tappable where it
+ * hangs over open space above the bar.
+ */
+function RecordDisc({ islandHeight }: { islandHeight: number }) {
+  const onPress = useStartSeizure();
+  const press = useRef(new Animated.Value(1)).current;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => Animated.spring(press, { toValue: 0.9, ...SPRING }).start()}
+      onPressOut={() => Animated.spring(press, { toValue: 1, ...SPRING }).start()}
+      accessibilityRole="button"
+      accessibilityLabel="Record seizure"
+      accessibilityHint="Starts the seizure timer immediately"
+      style={[
+        styles.recordFloat,
+        // Measured from the dock's bottom edge, which is the island's bottom
+        // (the dock pads upward only): lift the disc so its top clears the
+        // island by exactly RECORD_OVERHANG.
+        { bottom: islandHeight + RECORD_OVERHANG - RECORD_DISC },
+      ]}
+    >
+      <Animated.View style={[styles.recordDisc, { transform: [{ scale: press }] }]}>
+        {/* `md`. At `lg` inside a 46pt disc the white ring fills it corner to
+            corner and the red reads as a thin outline, not a filled button. */}
+        <Icon name="record" size="md" color={colors.onMedia} filled />
+      </Animated.View>
     </Pressable>
   );
 }
@@ -385,7 +459,6 @@ function TabButton({
   const scale = useRef(new Animated.Value(scaleFor(distance))).current;
   const lift = useRef(new Animated.Value(focused ? 1 : 0)).current;
   const press = useRef(new Animated.Value(1)).current;
-  const glow = useRef(new Animated.Value(0)).current;
 
   // Re-run the falloff whenever the active tab moves, so the whole row
   // resettles the way a dock does when the cursor travels across it.
@@ -400,14 +473,8 @@ function TabButton({
   return (
     <Pressable
       onPress={onPress}
-      onPressIn={() => {
-        Animated.spring(press, { toValue: 0.9, ...SPRING }).start();
-        Animated.spring(glow, { toValue: 1, ...SPRING }).start();
-      }}
-      onPressOut={() => {
-        Animated.spring(press, { toValue: 1, ...SPRING }).start();
-        Animated.spring(glow, { toValue: 0, ...SPRING }).start();
-      }}
+      onPressIn={() => Animated.spring(press, { toValue: 0.9, ...SPRING }).start()}
+      onPressOut={() => Animated.spring(press, { toValue: 1, ...SPRING }).start()}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
       accessibilityLabel={label}
@@ -431,12 +498,6 @@ function TabButton({
               { opacity: chipOpacity },
             ]}
             pointerEvents="none"
-          />
-
-          {/* Press ring, tracing the chip so it reads as the same object lighting up. */}
-          <Animated.View
-            pointerEvents="none"
-            style={[styles.chipRing, { opacity: Animated.multiply(glow, 0.7) }]}
           />
 
           {/* Only the glyph scales. The chip holding it stays put, so the
@@ -466,7 +527,27 @@ function TabButton({
 }
 
 const styles = StyleSheet.create({
-  dock: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+  /**
+   * `paddingTop` is load-bearing, and it is a touch fix rather than a spacing
+   * one.
+   *
+   * The dock's height comes from the island, because the Record disc is
+   * absolutely positioned and contributes nothing to layout. That left the
+   * overhanging top of the disc drawn OUTSIDE its parent's bounds — where it
+   * renders perfectly and, on iOS, receives no touches at all, because
+   * hit-testing stops at the parent's frame. The emergency button would have
+   * had a dead top edge that looked completely normal.
+   *
+   * The padding grows the dock upward (it is anchored by `bottom`), so the
+   * bounds contain the whole disc.
+   */
+  dock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingTop: DOCK_PAD,
+  },
   // Outer: carries the lift that separates the island from the content behind.
   islandShadow: {
     shadowColor: '#20293A',
@@ -563,17 +644,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(47,126,134,0.20)',
   },
-  /** Concentric with the chip: pushed out by RING_OFFSET, radius grown to match. */
-  chipRing: {
-    position: 'absolute',
-    top: -(RING_OFFSET + RING_WIDTH),
-    left: -(RING_OFFSET + RING_WIDTH),
-    right: -(RING_OFFSET + RING_WIDTH),
-    bottom: -(RING_OFFSET + RING_WIDTH),
-    borderRadius: radius.control + RING_OFFSET,
-    borderWidth: RING_WIDTH,
-    borderColor: colors.tealDeep,
-  },
   /**
    * One glyph height for every column, record included.
    *
@@ -583,29 +653,37 @@ const styles = StyleSheet.create({
    * `overflow: hidden` sliced a flat edge off the top of the circle.
    */
   glyphSlot: { height: GLYPH_SLOT, alignItems: 'center', justifyContent: 'center' },
-  /** Ring for the record disc — circular, and red so it stays the disc's own colour. */
-  recordRing: {
-    position: 'absolute',
-    width: GLYPH_SLOT + RING_OFFSET * 2 + RING_WIDTH * 2,
-    height: GLYPH_SLOT + RING_OFFSET * 2 + RING_WIDTH * 2,
-    borderRadius: (GLYPH_SLOT + RING_OFFSET * 2 + RING_WIDTH * 2) / 2,
-    borderWidth: RING_WIDTH,
-    borderColor: colors.red,
-  },
+  /** Centred over the middle column, which is the middle of the dock. */
+  recordFloat: { position: 'absolute', alignSelf: 'center' },
   recordDisc: {
-    width: GLYPH_SLOT,
-    height: GLYPH_SLOT,
-    borderRadius: GLYPH_SLOT / 2,
+    width: RECORD_DISC,
+    height: RECORD_DISC,
+    borderRadius: RECORD_DISC / 2,
+    // A ring of the page behind it, so the disc reads as sitting ON the bar
+    // rather than as a hole punched through it where the two overlap. Two
+    // points, not three: on a 46pt disc a 3pt ring is 13% of the width and
+    // starts reading as a deliberate outline rather than as separation.
+    borderWidth: 2,
+    borderColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.red,
-    // A lift of its own, so the disc reads as sitting ON the bar rather than
-    // being a coloured hole cut into it.
+    /*
+     * A lift, not a glow.
+     *
+     * This was a red shadow at 0.4 over an 8pt radius, and measured off a
+     * screenshot the pink halo carried the disc's visual footprint from 42pt
+     * of actual button to 61pt — half again as large as the shape itself.
+     * That is most of why the button read as oversized even after it was made
+     * smaller: the eye was sizing the glow, not the disc.
+     *
+     * Softened to a shadow that separates it from the glass and stops there.
+     */
     shadowColor: colors.redDeep,
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 6,
+    shadowOpacity: 0.18,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
   },
   recordLabel: {
     fontSize: fontSize.xs,

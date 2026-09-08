@@ -16,10 +16,10 @@
  */
 
 import { AppState, type AppStateStatus } from 'react-native';
+import { useAppStore } from '@/store/appStore';
 import * as Network from 'expo-network';
-import { getDb } from '@/db/client';
-import * as outbox from '@/db/outbox';
 import { getSupabase } from '@/services/supabase';
+import { flushPendingConsent } from '@/services/consent';
 import { deleteVideoFile } from '@/services/videoService';
 import { collectOrphanedFiles, forgetVideoFiles } from '@/db/tombstone';
 import { pushAll } from './push';
@@ -115,6 +115,21 @@ async function run(reason: SyncReason): Promise<SyncSummary | null> {
 
     await touchThisDevice();
 
+    /*
+     * An agreement accepted offline is recorded locally and left pending, so
+     * the owner is never held at a legal screen by a dead connection. This is
+     * where it catches up. Cheap when there is nothing outstanding — one key
+     * read — and deliberately before the push, because a consent record that
+     * never lands is the one piece of state here with legal weight.
+     */
+    const client = getSupabase();
+    if (client) {
+      const { data: consentSession } = await client.auth.getSession();
+      if (consentSession.session) {
+        await flushPendingConsent(consentSession.session.user.id);
+      }
+    }
+
     await pushSettings();
     const push = await pushAll();
 
@@ -134,14 +149,41 @@ async function run(reason: SyncReason): Promise<SyncSummary | null> {
       await forgetVideoFiles(pull.removedVideoIds);
     }
 
-    const db = await getDb();
     lastSyncAt = Date.now();
     consecutiveFailures = 0;
+
+    /*
+     * ── A PULL THAT NOBODY READS IS A PULL THAT DID NOT HAPPEN ─────────
+     *
+     * The pull writes straight to SQLite. The stores do not watch SQLite —
+     * `dogs` is read once by `hydrate()` at launch — so rows that arrived
+     * from the server stayed invisible until the app was killed and
+     * relaunched.
+     *
+     * On the device that recorded the data nobody noticed: it already had
+     * every row. It broke the case the sync exists FOR. Sign in on a second
+     * phone and the dog list stayed empty however well the pull worked, so
+     * the route gate saw "no dog", sent the owner to onboarding, and asked
+     * them to create the dog they already have — one confirm away from a
+     * duplicate on the account.
+     *
+     * Only on `pulled > 0`: a sync that changed nothing locally has nothing
+     * to re-read, and this runs on every foreground.
+     */
+    if (pull.applied > 0) {
+      await useAppStore
+        .getState()
+        .refreshDogs()
+        .catch((e) => console.warn('[sync] could not re-read after pull', e));
+    }
 
     const summary: SyncSummary = {
       pushed: push.pushed,
       pulled: pull.applied,
-      remaining: await outbox.pendingCount(db),
+      // `push` already counted what remains for THIS account. Re-counting the
+      // whole table here would fold in another account's entries and unclaimed
+      // ones, and report a queue this session can never drain.
+      remaining: push.remaining,
       fullResync: pull.fullResync,
       at: lastSyncAt,
     };

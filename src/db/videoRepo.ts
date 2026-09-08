@@ -263,6 +263,11 @@ export async function attachVideo(video: NewVideoInput): Promise<string> {
     throw new Error(`[videoRepo] seizure ${video.seizureId} not found`);
   }
 
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `INSERT INTO videos (
@@ -272,7 +277,7 @@ export async function attachVideo(video: NewVideoInput): Promise<string> {
          file_uri, thumb_uri, created_at, updated_at
        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        id, newRowOwner(), dogId, video.seizureId, video.source,
+        id, rowOwner, dogId, video.seizureId, video.source,
         video.timestamp, video.importedAt, video.captureConfidence,
         video.durationSec, video.note,
         video.preNote ?? '', video.ictalNote ?? '', video.postNote ?? '',
@@ -293,7 +298,7 @@ export async function attachVideo(video: NewVideoInput): Promise<string> {
       [id, video.fileUri, video.thumbUri ?? ''],
     );
 
-    await enqueue(db, 'videos', id, 'upsert', now);
+    await enqueue(db, 'videos', id, 'upsert', rowOwner, now);
   });
   return id;
 }
@@ -388,22 +393,34 @@ export async function updateVideo(
   const touchesThumb = patch.thumbUri !== undefined;
   if (keys.length === 0 && !touchesThumb) return;
 
+  // Fenced to the signed-in account, not just to the id. Every caller reaches
+  // this through an owner-scoped read today, so nothing is currently reachable
+  // across accounts — but the outbox entry below stamps the CURRENT owner, so
+  // a future call site that hands over an id from anywhere else would push
+  // another account's video row into this one. The predicate makes that
+  // impossible rather than merely unlikely. Same reasoning as dogRepo.updateDog.
+  const owner = ownerScope();
+
   await db.withTransactionAsync(async () => {
     if (keys.length > 0) {
       const assignments = keys.map((key) => `${PATCH_COLUMNS[key]} = ?`);
       const values = keys.map((key) => patch[key] as string | number);
       await db.runAsync(
         `UPDATE videos SET ${assignments.join(', ')}, updated_at = ?
-          WHERE id = ? AND deleted_at IS NULL`,
-        [...values, now, videoId],
+          WHERE id = ? AND deleted_at IS NULL AND ${owner.sql}`,
+        [...values, now, videoId, ...owner.params],
       );
-      await enqueue(db, 'videos', videoId, 'upsert', now);
+      await enqueue(db, 'videos', videoId, 'upsert', newRowOwner(), now);
     }
 
     if (touchesThumb) {
+      // video_files has no user_id of its own — it is keyed on the video, and
+      // the video carries the ownership. The subquery is what fences it.
       await db.runAsync(
-        `UPDATE video_files SET thumb_uri = ? WHERE video_id = ?`,
-        [patch.thumbUri ?? '', videoId],
+        `UPDATE video_files SET thumb_uri = ?
+          WHERE video_id = ?
+            AND video_id IN (SELECT id FROM videos WHERE ${owner.sql})`,
+        [patch.thumbUri ?? '', videoId, ...owner.params],
       );
     }
   });

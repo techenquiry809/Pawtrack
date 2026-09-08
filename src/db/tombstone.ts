@@ -30,6 +30,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { getDb } from './client';
 import { enqueue } from './outbox';
+import { newRowOwner, ownerScope } from './scope';
 import { TOMBSTONE_CHILDREN, q, syncSpec } from './syncSchema';
 
 /**
@@ -77,11 +78,29 @@ export async function tombstoneWithin(
 
   const holes = rowIds.map(() => '?').join(',');
 
+  /*
+   * FENCED TO THE SIGNED-IN ACCOUNT, AT EVERY STEP OF THE WALK.
+   *
+   * This is the delete path for every synced table, and it was keyed on the id
+   * alone. Nothing reaches it across accounts today — the ids all come from
+   * owner-scoped reads — but "the caller already checked" is the assumption
+   * that makes a destructive statement dangerous the first time a new caller
+   * does not. The enqueue below stamps the CURRENT owner, so an unfenced walk
+   * would push a delete for somebody else's records into this account.
+   *
+   * Captured ONCE for the whole recursive walk rather than re-read per level,
+   * for the same reason attachVideo captures newRowOwner() once: there are
+   * awaits between the levels, and a session landing mid-walk must not tombstone
+   * a parent as one account and its children as another.
+   */
+  const owner = ownerScope();
+
   // Only rows that are still live. Re-tombstoning would bump updated_at and
   // re-queue a push for a row the server already has as deleted.
   const live = await db.getAllAsync<{ id: string }>(
-    `SELECT id FROM ${q(table)} WHERE id IN (${holes}) AND deleted_at IS NULL`,
-    rowIds,
+    `SELECT id FROM ${q(table)}
+      WHERE id IN (${holes}) AND deleted_at IS NULL AND ${owner.sql}`,
+    [...rowIds, ...owner.params],
   );
   if (live.length === 0) return;
 
@@ -93,12 +112,12 @@ export async function tombstoneWithin(
   // made on another device before the delete.
   await db.runAsync(
     `UPDATE ${q(table)} SET deleted_at = ?, updated_at = ?
-      WHERE id IN (${liveHoles})`,
-    [now, now, ...liveIds],
+      WHERE id IN (${liveHoles}) AND ${owner.sql}`,
+    [now, now, ...liveIds, ...owner.params],
   );
 
   for (const id of liveIds) {
-    await enqueue(db, table, id, 'delete', now);
+    await enqueue(db, table, id, 'delete', newRowOwner(), now);
   }
 
   // Depth is bounded by the schema (dog → seizure → video is the deepest
@@ -106,8 +125,9 @@ export async function tombstoneWithin(
   for (const child of TOMBSTONE_CHILDREN[table] ?? []) {
     const rows = await db.getAllAsync<{ id: string }>(
       `SELECT id FROM ${q(child.table)}
-        WHERE ${q(child.localColumn)} IN (${liveHoles}) AND deleted_at IS NULL`,
-      liveIds,
+        WHERE ${q(child.localColumn)} IN (${liveHoles})
+          AND deleted_at IS NULL AND ${owner.sql}`,
+      [...liveIds, ...owner.params],
     );
     if (rows.length > 0) {
       await tombstoneWithin(db, child.table, rows.map((r) => r.id), now);
@@ -160,8 +180,13 @@ export async function forgetVideoFiles(videoIds: string[]): Promise<void> {
   if (videoIds.length === 0) return;
   const db = await getDb();
   const holes = videoIds.map(() => '?').join(',');
+  // video_files carries no user_id — it is keyed on the video, and the video
+  // carries the ownership — so the fence is a subquery. See updateVideo.
+  const owner = ownerScope();
   await db.runAsync(
-    `DELETE FROM video_files WHERE video_id IN (${holes})`,
-    videoIds,
+    `DELETE FROM video_files
+      WHERE video_id IN (${holes})
+        AND video_id IN (SELECT id FROM videos WHERE ${owner.sql})`,
+    [...videoIds, ...owner.params],
   );
 }

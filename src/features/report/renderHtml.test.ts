@@ -19,8 +19,6 @@ import { test } from 'node:test';
 
 import {
   esc,
-  fmtClock,
-  fmtClockIfKnown,
   fmtDuration,
   renderReportHtml,
   reportFileName,
@@ -75,24 +73,6 @@ test('an absent duration is a dash, never "0s"', () => {
   assert.equal(fmtDuration(null), '—');
   assert.equal(fmtDuration(0), '—');
   assert.equal(fmtDuration(undefined), '—');
-});
-
-test('clock times are zero-padded to 24h', () => {
-  assert.equal(fmtClock(new Date(2026, 7, 30, 8, 4).getTime()), '08:04');
-  assert.equal(fmtClock(new Date(2026, 7, 30, 23, 59).getTime()), '23:59');
-});
-
-test('a record with no stated time prints no time, not midnight', () => {
-  // A blank time is stored as the start of that day. Printing it would put
-  // "00:00" on a vet report, indistinguishable from a seizure genuinely
-  // observed at midnight — the confusion this whole confidence field exists to
-  // prevent. `timingNote` still states the provenance in words.
-  const midnight = new Date(2026, 7, 30, 0, 0).getTime();
-  assert.equal(fmtClockIfKnown(midnight, 'unknown'), '');
-  assert.equal(fmtClockIfKnown(midnight, 'approximate'), '00:00');
-  assert.equal(fmtClockIfKnown(new Date(2026, 7, 30, 8, 4).getTime(), 'exact'), '08:04');
-  // A real midnight seizure the owner DID time must still print.
-  assert.equal(fmtClockIfKnown(midnight, 'exact'), '00:00');
 });
 
 test('every seizure gets a timing marker, including the good ones', () => {
@@ -386,7 +366,7 @@ test('the prescribed regimen is printed even when no dose was logged', () => {
   assert.ok(html.includes('Phenobarbital'));
   assert.ok(html.includes('30 mg'), 'dose and unit should read as one value');
   assert.ok(html.includes('Twice daily'));
-  assert.ok(html.includes('08:00'), 'reminder times belong in the regimen');
+  assert.ok(!html.includes('08:00'), 'the report no longer prints clock times');
   assert.ok(html.includes('Dr Adeyemi'));
   assert.ok(html.includes('No medication recorded in this period.'), 'the dose log still says it is empty');
 });
@@ -438,4 +418,127 @@ test('only the profile fields the owner filled in are printed', () => {
   assert.ok(!html.includes('Weight'), 'an unfilled field was printed');
   assert.ok(!html.includes('Allergies'));
   assert.ok(!html.includes('Care team'), 'an empty care team should be omitted');
+});
+
+/* ------------------------------------------------------------------ */
+/* The dose log                                                        */
+/* ------------------------------------------------------------------ */
+/*
+ * A vet reads down this table to answer one question: was the drug taken, and
+ * when was it meant to be. It used to repeat the date on every row and print
+ * the raw enum, so three doses on one day were three identical lines saying
+ * "2026-08-30  Keppra  given" with nothing distinguishing them.
+ */
+
+const doseRow = (
+  doseDate: string,
+  scheduledHHMM: string,
+  status: 'given' | 'late' | 'missed',
+  medicationName: string | null = 'Keppra',
+) => ({
+  id: `${doseDate}-${scheduledHHMM}`,
+  medicationId: 'm1',
+  dogId: 'd1',
+  doseDate,
+  scheduledHHMM,
+  status,
+  recordedAt: 0,
+  note: '',
+  createdAt: 0,
+  medicationName,
+});
+
+const withDoses = (rows: ReturnType<typeof doseRow>[]) => ({
+  ...emptySummary(),
+  doseRows: rows,
+  isEmpty: false,
+});
+
+const renderWith = (summary: unknown, dog: unknown = bareDog) =>
+  renderReportHtml({
+    summary: summary as never,
+    dog: dog as never,
+    dogName: 'Lucy',
+    breedLabel: 'Labrador Retriever',
+    rangeLabel: 'Sunday 30 Aug 2026',
+  });
+
+test('a day with several doses prints its date once, not once per row', () => {
+  const html = renderWith(
+    withDoses([
+      doseRow('2026-08-30', '08:00', 'given'),
+      doseRow('2026-08-30', '12:00', 'late'),
+      doseRow('2026-08-30', '20:00', 'missed'),
+    ]),
+  );
+  const dateCount = html.split('2026-08-30').length - 1;
+  assert.equal(dateCount, 1, `the date should appear once, appeared ${dateCount} times`);
+});
+
+test('each dose row is identified by its scheduled time, in 12-hour form', () => {
+  const html = renderWith(
+    withDoses([
+      doseRow('2026-08-30', '08:00', 'given'),
+      doseRow('2026-08-30', '12:00', 'late'),
+      doseRow('2026-08-30', '20:00', 'missed'),
+    ]),
+  );
+  assert.ok(html.includes('8:00 am'), '8:00 am missing');
+  assert.ok(html.includes('12:00 pm'), 'noon must be pm, not am');
+  assert.ok(html.includes('8:00 pm'), '20:00 should read as 8:00 pm');
+});
+
+test('a second day starts a new group with its own date', () => {
+  const html = renderWith(
+    withDoses([
+      doseRow('2026-08-30', '08:00', 'given'),
+      doseRow('2026-08-31', '08:00', 'given'),
+    ]),
+  );
+  assert.equal(html.split('2026-08-30').length - 1, 1);
+  assert.equal(html.split('2026-08-31').length - 1, 1);
+});
+
+test('the status is printed in words, never as the stored enum', () => {
+  // "given" alone in a column is ambiguous to a reader who has not been told
+  // the vocabulary — and "missed" reads as an accusation rather than a report.
+  const html = renderWith(
+    withDoses([
+      doseRow('2026-08-30', '08:00', 'given'),
+      doseRow('2026-08-30', '12:00', 'late'),
+      doseRow('2026-08-30', '20:00', 'missed'),
+    ]),
+  );
+  assert.ok(html.includes('Given on time'));
+  assert.ok(html.includes('Given late'));
+  assert.ok(html.includes('Not given'));
+  // The class hooks still carry the enum; the visible cell must not.
+  assert.ok(!html.includes('>given<'), 'the raw enum leaked into a cell');
+  assert.ok(!html.includes('>missed<'), 'the raw enum leaked into a cell');
+});
+
+test('an ad-hoc dose with no slot does not print a fabricated time', () => {
+  const html = renderWith(withDoses([doseRow('2026-08-30', '', 'given')]));
+  assert.ok(html.includes('—'), 'an unscheduled dose should read as a dash');
+  assert.ok(!html.includes('12:00 am'), 'an empty slot must not become midnight');
+});
+
+/* ------------------------------------------------------------------ */
+/* Dog facts                                                           */
+/* ------------------------------------------------------------------ */
+
+test('an undiagnosed dog does not get a "Diagnosis" row', () => {
+  // 'undiagnosed' is the field's empty value. Printing it states the absence
+  // of a finding as though it were one, in a document about what IS known.
+  const html = renderWith(emptySummary(), { ...bareDog, diagnosisStatus: 'undiagnosed' });
+  assert.ok(!html.includes('undiagnosed'), 'the empty diagnosis was printed');
+  assert.ok(!html.includes('Diagnosis'), 'an empty Diagnosis row was printed');
+});
+
+test('a real diagnosis is still printed — it is what a referral vet reads first', () => {
+  for (const status of ['suspected', 'diagnosed']) {
+    const html = renderWith(emptySummary(), { ...bareDog, diagnosisStatus: status });
+    assert.ok(html.includes('Diagnosis'), `${status} lost its row`);
+    assert.ok(html.includes(status), `${status} was not printed`);
+  }
 });

@@ -255,6 +255,11 @@ export async function enforceRevocation(): Promise<boolean> {
   const db = await getDb();
   let stranded = 0;
 
+  // Whose queue this is. Read BEFORE the sign-out below, which is the last
+  // moment the session still names the account being revoked.
+  const { data: sessionData } = await supabase.auth.getSession();
+  const owner = sessionData.session?.user.id ?? null;
+
   try {
     const { pushAll } = await import('./push');
     await pushAll();
@@ -262,7 +267,10 @@ export async function enforceRevocation(): Promise<boolean> {
     console.warn('[sync] revoked device could not drain its outbox', pushError);
   }
 
-  stranded = await outbox.pendingCount(db);
+  // Scoped to the revoked account: another account's undrained entries, and
+  // unclaimed ones, are not stranded BY this revocation and must not be
+  // reported as though the owner had just lost them.
+  stranded = await outbox.pendingCount(db, owner);
   await setSyncValue(STRANDED_KEY, String(stranded));
 
   // Local rows are deliberately left in place. Sign-out is not a statement

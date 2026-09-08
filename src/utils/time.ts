@@ -154,3 +154,73 @@ export function localDayKey(epochMs = Date.now()): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${month}-${day}`;
 }
+
+/**
+ * The hour a "day" starts for the Daily Pulse, in local time.
+ *
+ * Not midnight, because midnight is not when people go to bed. The pulse asks
+ * how the dog's day went; someone still awake at 1am is answering for the day
+ * that is ending, and a card that reappears the moment the clock rolls over
+ * asks them the same question twice in one evening — then leaves the day they
+ * actually meant unanswered.
+ *
+ * 4am is late enough to sit past almost every bedtime and early enough that
+ * nobody who wakes up normally finds yesterday's card still waiting.
+ */
+/**
+ * A stored 'HH:MM' reminder time, written the way people say it: '7:00 am'.
+ *
+ * ── DISPLAY ONLY. THE STORED FORM NEVER CHANGES ───────────────────────
+ *
+ * `medication_reminders.time_hhmm` stays 24-hour, and must: it sorts
+ * lexicographically (which is how the dose list orders its slots), it is what
+ * the notification scheduler parses, and it is the same string on every
+ * device regardless of the owner's locale. Only what a person READS is
+ * converted here.
+ *
+ * Lower-case 'am'/'pm' rather than 'AM'/'PM' — the app's own voice is quiet,
+ * and a shouted meridiem next to a large time reads as an abbreviation to
+ * decode rather than as a word.
+ */
+export function formatTimeOfDay(timeHHMM: string): string {
+  const [rawHour, rawMinute] = timeHHMM.split(':');
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  // Anything unparseable is handed back untouched. A reminder showing '25:99'
+  // is a visible bug someone can report; one silently rendered as '1:99 am' is
+  // a wrong time on a medication screen.
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return timeHHMM;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return timeHHMM;
+
+  const meridiem = hour < 12 ? 'am' : 'pm';
+  // 0 and 12 both map to 12: midnight is 12 am, noon is 12 pm.
+  const display = hour % 12 === 0 ? 12 : hour % 12;
+  return `${display}:${String(minute).padStart(2, '0')} ${meridiem}`;
+}
+
+export const PULSE_DAY_START_HOUR = 4;
+
+/**
+ * Which day the Daily Pulse is currently asking about, as 'YYYY-MM-DD'.
+ *
+ * The calendar day of four hours ago, so 00:00–03:59 still belongs to the day
+ * before. This is a LOCAL calculation on the device's own clock, so it follows
+ * the owner across timezones without any stored offset — fly to Sydney and the
+ * pulse rolls over at 4am Sydney time, on the Sydney date.
+ *
+ * ── IT IS NOT A REPLACEMENT FOR localDayKey ───────────────────────────
+ *
+ * Only the pulse uses this. `localDayKey` remains the key for the check-in
+ * unique index, the dose log, the calendar and reports, and it must: those are
+ * calendar records that a vet reads, and quietly filing a 2am entry under
+ * "yesterday" in a medical history would be a lie of exactly the kind this
+ * app cannot afford. The pulse is a mood tap, not a medical record, and it is
+ * the one place the softer boundary is both wanted and harmless.
+ *
+ * The consequence is deliberate and worth knowing: a mood tapped at 2am is
+ * stored against the previous calendar date, which is the date the owner meant
+ * — and is what the Check-in tab will show it under.
+ */
+export function pulseDayKey(epochMs = Date.now()): string {
+  return localDayKey(epochMs - PULSE_DAY_START_HOUR * 60 * 60 * 1000);
+}

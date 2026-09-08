@@ -20,7 +20,31 @@ import 'react-native-url-polyfill/auto';
 import { AppState, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
+import * as ExpoCrypto from 'expo-crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+
+/**
+ * Also before the supabase-js import: auth-js needs `crypto.getRandomValues`
+ * and `crypto.subtle.digest` to build the PKCE code verifier/challenge used by
+ * sign-up confirmation and password-reset links, and Hermes provides neither.
+ * Left unpolyfilled, auth-js falls back to `Math.random()` for the verifier
+ * and to the unhashed verifier itself as the challenge — functional, but not
+ * what PKCE is for. `expo-crypto`'s `getRandomValues`/`digest` are drop-in,
+ * natively-backed implementations of those exact two methods, so this wires
+ * them in rather than adding a second crypto dependency.
+ */
+if (typeof globalThis.crypto === 'undefined') {
+  // @ts-expect-error partial polyfill — only what auth-js's PKCE helpers use
+  globalThis.crypto = {};
+}
+globalThis.crypto.getRandomValues ??= ExpoCrypto.getRandomValues as Crypto['getRandomValues'];
+// `subtle` is read-only in the DOM types, which assumes a real browser can
+// never lack it — not true here, so the polyfill has to write past that.
+// @ts-expect-error partial polyfill — only `digest` is implemented
+globalThis.crypto.subtle ??= {
+  digest: (algorithm, data) =>
+    ExpoCrypto.digest(algorithm as ExpoCrypto.CryptoDigestAlgorithm, data as BufferSource),
+} as SubtleCrypto;
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */

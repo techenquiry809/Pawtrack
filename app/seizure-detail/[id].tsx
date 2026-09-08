@@ -191,6 +191,17 @@ export default function SeizureDetailScreen() {
       ]}
     >
       {/*
+        A back button, which this screen shipped without.
+
+        It exists in the "record not found" branch below and was missing from
+        the one people actually reach — so tapping a row in Recent seizures
+        led to a screen with no visible way out. On Android the hardware back
+        gesture still worked, which is most of why it survived: the screen was
+        only ever a dead end on iOS.
+      */}
+      <BackButton />
+
+      {/*
         The heading is the TIME, with the date above it — but only when there
         is a time. A record the owner could not time is stored at the start of
         that day, and printing that as a "00:00" headline states a midnight

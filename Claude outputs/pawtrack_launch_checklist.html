@@ -1,0 +1,415 @@
+<title>PawTrack Launch Checklist</title>
+<style>
+:root{
+  --bg:#F7F5F0;
+  --surface:#FFFFFF;
+  --surface-2:#FBFAF7;
+  --text:#20281F;
+  --text-muted:#5C6B5E;
+  --accent:#2E6F5A;
+  --accent-soft:#E1EEE7;
+  --border:#DEE4DC;
+  --warn:#A8631B;
+  --warn-soft:#F5E8D8;
+  --warn-border:#E7CDA0;
+  --danger:#A23B3B;
+  --shadow: 0 1px 2px rgba(32,40,31,0.06), 0 4px 14px rgba(32,40,31,0.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121713;
+    --surface:#1A211C;
+    --surface-2:#171D18;
+    --text:#E8ECE6;
+    --text-muted:#98A499;
+    --accent:#5FBE9E;
+    --accent-soft:#1E332C;
+    --border:#2A332B;
+    --warn:#D79A4B;
+    --warn-soft:#2E2618;
+    --warn-border:#4A3A22;
+    --danger:#D97676;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 20px rgba(0,0,0,0.35);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121713;
+  --surface:#1A211C;
+  --surface-2:#171D18;
+  --text:#E8ECE6;
+  --text-muted:#98A499;
+  --accent:#5FBE9E;
+  --accent-soft:#1E332C;
+  --border:#2A332B;
+  --warn:#D79A4B;
+  --warn-soft:#2E2618;
+  --warn-border:#4A3A22;
+  --danger:#D97676;
+  --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 6px 20px rgba(0,0,0,0.35);
+}
+
+*{box-sizing:border-box;}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  line-height:1.5;
+}
+h1,h2,h3{
+  font-family:'Fraunces', Georgia, serif;
+  text-wrap:balance;
+  margin:0;
+  color:var(--text);
+}
+.mono{font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace;}
+a{color:var(--accent);}
+
+.shell{
+  max-width:1180px;
+  margin:0 auto;
+  padding:40px 24px 80px;
+  display:grid;
+  grid-template-columns:250px minmax(0,1fr);
+  gap:36px;
+}
+@media (max-width:860px){
+  .shell{grid-template-columns:1fr;}
+  .nav{position:static !important;}
+}
+
+/* header */
+.masthead{
+  grid-column:1/-1;
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-end;
+  gap:24px;
+  flex-wrap:wrap;
+  border-bottom:1px solid var(--border);
+  padding-bottom:24px;
+  margin-bottom:4px;
+}
+.masthead .kicker{
+  font-family:'IBM Plex Mono', monospace;
+  font-size:12px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  color:var(--accent);
+  margin-bottom:8px;
+  display:block;
+}
+.masthead h1{font-size:34px; font-weight:600;}
+.masthead p{color:var(--text-muted); margin-top:8px; max-width:52ch; font-size:14.5px;}
+
+.overall{
+  display:flex;
+  align-items:center;
+  gap:16px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:14px 20px;
+  box-shadow:var(--shadow);
+  min-width:220px;
+}
+.ring{width:52px;height:52px;flex:none;}
+.overall-text .num{font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600;}
+.overall-text .label{font-size:11.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;}
+.reset-btn{
+  background:none;border:1px solid var(--border);color:var(--text-muted);
+  font-family:'IBM Plex Mono',monospace; font-size:11px; padding:6px 10px;
+  border-radius:8px; cursor:pointer; margin-left:auto;
+}
+.reset-btn:hover{border-color:var(--danger); color:var(--danger);}
+.reset-btn:focus-visible, button:focus-visible, input:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+/* nav */
+.nav{
+  position:sticky; top:24px; align-self:start;
+  display:flex; flex-direction:column; gap:2px;
+}
+.nav a{
+  display:flex; justify-content:space-between; gap:10px;
+  text-decoration:none; color:var(--text-muted);
+  font-size:13.5px; padding:8px 10px; border-radius:8px;
+}
+.nav a:hover{background:var(--surface-2); color:var(--text);}
+.nav a .count{font-family:'IBM Plex Mono',monospace; font-size:11.5px;}
+.nav .navbar{height:3px;background:var(--border);border-radius:3px;overflow:hidden;margin:2px 10px 10px;}
+.nav .navbar i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .2s;}
+
+/* sections */
+main{display:flex; flex-direction:column; gap:28px; min-width:0;}
+section.card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:22px 24px 20px;
+  box-shadow:var(--shadow);
+  scroll-margin-top:20px;
+}
+section.card.flag{
+  background:var(--warn-soft);
+  border-color:var(--warn-border);
+}
+.card-head{
+  display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap;
+  margin-bottom:4px;
+}
+.card-head h2{font-size:20px;}
+.card-head .tally{font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--text-muted);}
+.card-sub{color:var(--text-muted); font-size:13.5px; margin:4px 0 14px;}
+.flag .card-sub{color:var(--warn);}
+
+.bar{height:5px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:16px;}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:4px;transition:width .2s;}
+.flag .bar i{background:var(--warn);}
+
+ul.items{list-style:none; margin:0; padding:0; display:flex; flex-direction:column;}
+ul.items li{
+  display:flex; gap:12px; align-items:flex-start;
+  padding:10px 4px; border-top:1px solid var(--border);
+}
+ul.items li:first-child{border-top:none;}
+ul.items input[type=checkbox]{
+  appearance:none; -webkit-appearance:none;
+  width:19px;height:19px; flex:none; margin-top:2px;
+  border:1.5px solid var(--border); border-radius:6px;
+  background:var(--surface-2); cursor:pointer; position:relative;
+}
+ul.items input[type=checkbox]:checked{background:var(--accent); border-color:var(--accent);}
+ul.items input[type=checkbox]:checked::after{
+  content:"✓"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  color:var(--surface); font-size:13px; font-weight:700;
+}
+.item-text{font-size:14.5px;}
+.item-text .t{cursor:pointer;}
+li.done .item-text .t{color:var(--text-muted); text-decoration:line-through; text-decoration-color:var(--border);}
+.item-text .detail{display:block; color:var(--text-muted); font-size:13px; margin-top:2px;}
+.item-text code{font-family:'IBM Plex Mono',monospace; background:var(--surface-2); padding:1px 5px; border-radius:5px; font-size:12.5px;}
+
+footer{grid-column:1/-1; border-top:1px solid var(--border); padding-top:18px; margin-top:8px; color:var(--text-muted); font-size:12.5px;}
+footer a{color:var(--text-muted); text-decoration:underline;}
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="shell">
+  <div class="masthead">
+    <div>
+      <span class="kicker">PawTrack &middot; pre-production</span>
+      <h1>Launch checklist</h1>
+      <p>Engineering, QA and security sign-off before PawTrack ships — organized around your actual stack: Expo/React Native, local SQLite + outbox sync, Supabase (Postgres/Auth/RLS).</p>
+    </div>
+    <div class="overall">
+      <svg class="ring" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--border)" stroke-width="3.5"/>
+        <circle id="ringFg" cx="18" cy="18" r="15.5" fill="none" stroke="var(--accent)" stroke-width="3.5"
+          stroke-linecap="round" stroke-dasharray="97.4" stroke-dashoffset="97.4" transform="rotate(-90 18 18)"/>
+      </svg>
+      <div class="overall-text">
+        <div class="num"><span id="doneCount">0</span>/<span id="totalCount">0</span></div>
+        <div class="label">items checked</div>
+      </div>
+      <button class="reset-btn" id="resetBtn" type="button">Reset</button>
+    </div>
+  </div>
+
+  <nav class="nav" id="nav" aria-label="Sections"></nav>
+
+  <main id="main"></main>
+
+  <footer>
+    Checked items are saved in this browser only. Sourced against Supabase's own production checklist, the OWASP Mobile Top 10, and current Apple/Google submission requirements — links at the bottom of the page this was sent with.
+  </footer>
+</div>
+
+<script>
+const DATA = [
+  {
+    id:"open", flag:true,
+    title:"Open items from your build", sub:"Specific to PawTrack — resolve these before anything else on this page.",
+    items:[
+      {t:"Verify the 13 migrations you just pushed actually created the tables", d:"Query <code>public.profiles</code> / <code>public.user_devices</code> / <code>public.consents</code> via the Data API — don't just trust a clean push log."},
+      {t:"Wire the dead <code>backoffMs</code> logic into the sync worker", d:"It exists but isn't used — failed pushes should retry with increasing delay, not hammer or silently give up."},
+      {t:"Add the missing <code>ownerScope()</code> fence to <code>videoRepo.updateVideo</code>", d:"Without it, the RLS gate on the client side has a hole for this one write path."},
+      {t:"Decide the <code>Meal</code>/<code>MealSchema</code> question", d:"Either finish it properly or drop it from <code>SYNC_TABLES</code> — don't ship half-wired sync logic."},
+      {t:"Enable Google and Apple sign-in in Supabase, or remove the buttons", d:"Both providers show Disabled — a live button wired to a disabled provider throws at runtime."},
+      {t:"Finish the Terms of Service", d:"Still marked DRAFT. Needs to match the corrected Privacy Policy before either store listing goes live."},
+      {t:"Confirm the consent-record table is actually being written to and synced", d:"Not just that the migration applied — that <code>install_id</code>, <code>policy_hash</code>, and the claim-on-login step all work end to end."},
+      {t:"Confirm the MoodFace.tsx PNG swap is implemented and tested", d:"Check it with Reduce Motion on and off, and on the actual device, not just the simulator."},
+    ]
+  },
+  {
+    id:"eng", title:"Engineering & code quality", sub:"What a senior dev checks before cutting a release build.",
+    items:[
+      {t:"Strip debug output and test data", d:"No <code>console.log</code>/<code>console.warn</code> left in, no hardcoded test credentials or sample seizure entries."},
+      {t:"Confirm no secrets are bundled or committed", d:"Only the Supabase <b>anon</b> key belongs in the client. The <code>service_role</code> key and SMTP password must never touch the repo or the app bundle."},
+      {t:"Bump version and build numbers", d:"<code>app.json</code> version, iOS build number, Android <code>versionCode</code> — every submission needs a new one."},
+      {t:"Separate dev/staging/prod Supabase projects or env vars", d:"So a debug build can never accidentally write into the production database."},
+      {t:"Wrap the app root in an error boundary", d:"One component crash shouldn't blank-screen the whole app."},
+      {t:"Confirm no shipped migration was ever edited in place", d:"Every schema change is a new file — this is already your standing rule, just verify it held."},
+      {t:"Check image asset sizes", d:"Including the new mood PNGs — no accidental multi-MB files bloating the bundle."},
+      {t:"Grep the codebase for any upload/fetch touching a video file path", d:"Confirms the \"videos never leave the device\" claim in your Privacy Policy is actually true in code, not just in intent."},
+      {t:"Verify EAS build profiles in <code>eas.json</code>", d:"Production profile points at production env vars and never ships a dev client."},
+    ]
+  },
+  {
+    id:"qa", title:"QA & testing", sub:"On real devices — the Android bug that started this whole thread never showed up in a simulator.",
+    items:[
+      {t:"Full regression pass on a physical iPhone and Android phone"},
+      {t:"Re-test sign-up, OTP verification, password-reset OTP, and account deletion end to end", d:"Now that the migrations are actually live on the remote project."},
+      {t:"Test offline logging", d:"Log a seizure in airplane mode, reconnect, confirm it syncs through the outbox with no duplicates."},
+      {t:"Test a two-device conflict on purpose", d:"Edit the same dog's profile on two devices while both are offline, reconnect both — confirm the conflict rule behaves the way your 10/10 test proved it would."},
+      {t:"Test an expired or invalid session", d:"Forced sign-out / stale token shouldn't crash the app or silently drop a write."},
+      {t:"Test low storage and low battery during video recording"},
+      {t:"Re-run your RLS smoke test and sync_push conflict test against the live remote project", d:"They passed against a throwaway Postgres instance — confirm the same result now that it's real."},
+      {t:"Prepare a demo account with sample data for Apple's reviewer", d:"Sign-in is required to use the app, so App Review needs a way in."},
+    ]
+  },
+  {
+    id:"sec", title:"Security", sub:"Mobile app + backend, mapped against the current OWASP Mobile Top 10 and Supabase's own hardening guidance.",
+    items:[
+      {t:"RLS enabled and verified on every table", d:"<code>profiles</code>, <code>user_devices</code>, <code>dogs</code>, <code>seizures</code>, <code>videos</code>, <code>consents</code>, and <code>meals</code> if you keep it."},
+      {t:"SSL enforcement and network restrictions turned on in Supabase Database settings"},
+      {t:"MFA on your own Supabase account, plus a second project owner", d:"So you're not the single point of failure on your own production project."},
+      {t:"Confirm OTP requests are rate-limited", d:"Supabase's auth throttle setting — stops the OTP flow being used to spam someone's inbox."},
+      {t:"Run <code>npm audit</code> (or Snyk) and patch critical/high CVEs before release"},
+      {t:"Grep the repo and git history for leaked keys", d:"API keys, the Resend SMTP password, anything that shouldn't be there."},
+      {t:"Auth tokens stored via <code>expo-secure-store</code>", d:"Keychain/Keystore-backed, never plain AsyncStorage."},
+      {t:"Supabase Auth redirect/callback URLs locked to your app's own URL scheme", d:"Not a wildcard."},
+      {t:"Consent record can't be forged from the client", d:"<code>policy_hash</code> and <code>accepted_at</code> are verified against the bundled policy text, not just trusted as sent."},
+      {t:"If you add crash/error reporting, confirm it never captures video paths or full seizure notes", d:"Metadata only."},
+    ]
+  },
+  {
+    id:"priv", title:"Privacy & legal", sub:"Both store listings will reject you for a mismatch here faster than for almost anything else.",
+    items:[
+      {t:"Terms of Service finished and linked in-app and in both store listings", d:"Currently DRAFT."},
+      {t:"Privacy Policy hosted at a stable public URL", d:"Linked in-app, in App Store Connect, and in Play Console."},
+      {t:"Google Play Data Safety form matches reality exactly", d:"No location collected, videos stay local — list precisely what does sync: email, dog profile, seizure logs."},
+      {t:"Apple App Privacy \"nutrition label\" filled with the same accuracy"},
+      {t:"In-app account deletion reachable from Settings", d:"Apple requires this for any app that supports account creation — a backend capability alone doesn't satisfy it."},
+      {t:"Marketing copy and screenshots describe PawTrack as a tracking/logging tool", d:"Not a diagnostic or medical device — avoids extra health-app review scrutiny."},
+      {t:"Any data export/delete rights promised in the policy are actually implementable today"},
+    ]
+  },
+  {
+    id:"rel", title:"App Store & Play Store release", sub:"Expo/EAS specifics.",
+    items:[
+      {t:"iOS: valid distribution certificate and provisioning profile"},
+      {t:"iOS: App Store Connect listing complete", d:"Screenshots, description, category, age rating, support URL, App Privacy label."},
+      {t:"Android: signed <code>.aab</code> via your real upload keystore — and the keystore is backed up somewhere safe", d:"Losing it blocks all future updates to this app."},
+      {t:"Android: Play Console listing and content rating questionnaire complete"},
+      {t:"TestFlight build tested by at least one other person before public submission"},
+      {t:"Play Console internal or closed testing track validated before production rollout"},
+      {t:"Production build confirmed to point at the production Supabase project", d:"<code>esprfpxkshkauougvqmf</code> — not a dev/staging one."},
+      {t:"You know how to halt a staged Android rollout or pull a bad iOS build", d:"Before you need to, not while you need to."},
+    ]
+  },
+  {
+    id:"mon", title:"Monitoring & post-launch", sub:"What happens after the first stranger installs it.",
+    items:[
+      {t:"Crash reporting live and alerting before the first outside user opens the app"},
+      {t:"A way to see signup/usage counts", d:"Supabase dashboard or a small admin query — so you're not flying blind after launch."},
+      {t:"Support contact working and listed in both store listings", d:"Both stores require one."},
+      {t:"Know your Supabase backup window", d:"Enable Point-in-Time Recovery if the database will pass 4 GB."},
+      {t:"A short written plan for \"what do I do if something breaks at 2am\"", d:"Three bullet points beats nothing."},
+    ]
+  },
+];
+
+const STORAGE_KEY = "pawtrack-launch-checklist-v1";
+function loadState(){
+  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }catch(e){ return {}; }
+}
+function saveState(state){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
+}
+let state = loadState();
+
+const main = document.getElementById("main");
+const nav = document.getElementById("nav");
+const RING_CIRC = 97.4;
+
+DATA.forEach(section=>{
+  const sec = document.createElement("section");
+  sec.className = "card" + (section.flag ? " flag" : "");
+  sec.id = "sec-"+section.id;
+
+  sec.innerHTML = `
+    <div class="card-head">
+      <h2>${section.title}</h2>
+      <span class="tally mono"><span class="d">0</span>/<span class="tt">${section.items.length}</span></span>
+    </div>
+    <p class="card-sub">${section.sub||""}</p>
+    <div class="bar"><i style="width:0%"></i></div>
+    <ul class="items"></ul>
+  `;
+  const ul = sec.querySelector("ul.items");
+  section.items.forEach((it,idx)=>{
+    const id = section.id+"-"+idx;
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <input type="checkbox" id="${id}">
+      <label class="item-text" for="${id}">
+        <span class="t">${it.t}</span>
+        ${it.d ? `<span class="detail">${it.d}</span>` : ""}
+      </label>
+    `;
+    const cb = li.querySelector("input");
+    cb.checked = !!state[id];
+    if(cb.checked) li.classList.add("done");
+    cb.addEventListener("change", ()=>{
+      state[id] = cb.checked;
+      li.classList.toggle("done", cb.checked);
+      saveState(state);
+      updateProgress();
+    });
+    ul.appendChild(li);
+  });
+  main.appendChild(sec);
+
+  const a = document.createElement("a");
+  a.href = "#sec-"+section.id;
+  a.innerHTML = `<span>${section.title}</span><span class="count mono">0/${section.items.length}</span>`;
+  const barWrap = document.createElement("div");
+  barWrap.className = "navbar";
+  barWrap.innerHTML = `<i style="width:0%"></i>`;
+  nav.appendChild(a);
+  nav.appendChild(barWrap);
+});
+
+function updateProgress(){
+  let doneTotal=0, all=0;
+  DATA.forEach((section,i)=>{
+    const sec = document.getElementById("sec-"+section.id);
+    const items = section.items.length;
+    let done=0;
+    section.items.forEach((_,idx)=>{ if(state[section.id+"-"+idx]) done++; });
+    doneTotal+=done; all+=items;
+    sec.querySelector(".tally .d").textContent = done;
+    sec.querySelector(".bar i").style.width = (items? (done/items*100):0)+"%";
+    const navEntries = nav.querySelectorAll("a");
+    const navBars = nav.querySelectorAll(".navbar i");
+    navEntries[i].querySelector(".count").textContent = done+"/"+items;
+    navBars[i].style.width = (items? (done/items*100):0)+"%";
+  });
+  document.getElementById("doneCount").textContent = doneTotal;
+  document.getElementById("totalCount").textContent = all;
+  const pct = all ? doneTotal/all : 0;
+  document.getElementById("ringFg").style.strokeDashoffset = RING_CIRC * (1-pct);
+}
+updateProgress();
+
+document.getElementById("resetBtn").addEventListener("click", ()=>{
+  if(!confirm("Uncheck everything on this checklist?")) return;
+  state = {};
+  saveState(state);
+  document.querySelectorAll('ul.items input[type=checkbox]').forEach(cb=>{
+    cb.checked=false;
+    cb.closest('li').classList.remove('done');
+  });
+  updateProgress();
+});
+</script>

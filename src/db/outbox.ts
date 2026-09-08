@@ -53,28 +53,52 @@ export type OutboxEntry = {
  * and outranks any 'upsert' on either side. That matches the server's rule in
  * sync_apply_row — a tombstone is a terminal state, and a resurrected seizure
  * record is worse than a lost edit.
+ *
+ * ── THE OWNER IS AN ARGUMENT, NOT AN AMBIENT READ ─────────────────────
+ *
+ * `owner` is REQUIRED and has no default, so the compiler makes every write
+ * site name the account it is queueing for, inside the same transaction as
+ * the row write. The alternative — reading newRowOwner() in here — would be
+ * this module reaching into module-level session state at an unspecified
+ * later moment, which is the exact shape of the bug migration 13 closes:
+ * sign-out does not block on an undrained queue, so "the account that queued
+ * this" and "the account signed in when it drains" are different facts, and
+ * only the first is correct.
+ *
+ * Callers pass newRowOwner(), captured once alongside the row's own user_id
+ * so the two cannot diverge. Keeping this module free of runtime imports also
+ * keeps it loadable by `node --test` — the same constraint that split
+ * store/authThrottle.ts out of authStore.
+ *
+ * `null` is a real value: queued while signed out, belonging to no account
+ * yet, and not pushable until claimed. See services/sync/claim.ts.
  */
 export async function enqueue(
   db: SQLiteDatabase,
   tableName: string,
   rowId: string,
   op: OutboxOp,
+  owner: string | null,
   now: number = Date.now(),
 ): Promise<void> {
   await db.runAsync(
-    `INSERT INTO outbox (table_name, row_id, op, queued_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO outbox (table_name, row_id, op, queued_at, user_id)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(table_name, row_id) DO UPDATE SET
        op = CASE
               WHEN excluded.op = 'delete' OR outbox.op = 'delete' THEN 'delete'
               ELSE excluded.op
             END,
        queued_at = excluded.queued_at,
+       -- The claim flow re-enqueues rows it has just assigned to an account,
+       -- and that re-stamp is the whole point: an entry queued while signed
+       -- out (user_id NULL) becomes pushable only by being claimed.
+       user_id = excluded.user_id,
        -- New content deserves a fresh run at the backoff ladder rather than
        -- inheriting the failures of the version it replaces.
        attempts = 0,
        last_error = NULL`,
-    [tableName, rowId, op, now],
+    [tableName, rowId, op, now, owner],
   );
 }
 
@@ -84,10 +108,11 @@ export async function enqueueMany(
   tableName: string,
   rowIds: string[],
   op: OutboxOp,
+  owner: string | null,
   now: number = Date.now(),
 ): Promise<void> {
   for (const rowId of rowIds) {
-    await enqueue(db, tableName, rowId, op, now);
+    await enqueue(db, tableName, rowId, op, owner, now);
   }
 }
 
@@ -138,8 +163,20 @@ export function isDue(
   return now >= entry.lastAttemptAt + backoffMs(entry.attempts);
 }
 
+/**
+ * The next slice to push FOR ONE ACCOUNT.
+ *
+ * `owner` is required and comes from the session the push is about to
+ * authenticate with — not from a module-level store, which is what makes this
+ * a fence rather than a convention. An entry queued by another account, or
+ * queued while signed out (user_id NULL, unclaimed), is not eligible: the
+ * server stamps auth.uid() on whatever it receives, so draining someone else's
+ * entry on this session writes their dog's records into this account. See
+ * migration 13.
+ */
 export async function peek(
   db: SQLiteDatabase,
+  owner: string,
   limit = 200,
   now = Date.now(),
 ): Promise<OutboxEntry[]> {
@@ -152,7 +189,7 @@ export async function peek(
     attempts: number;
     last_error: string | null;
     last_attempt_at: number | null;
-  }>(`SELECT * FROM outbox ORDER BY id LIMIT ?`, [limit]);
+  }>(`SELECT * FROM outbox WHERE user_id = ? ORDER BY id LIMIT ?`, [owner, limit]);
 
   return rows
     .map((r) => ({
@@ -209,10 +246,30 @@ export async function recordFailure(
   );
 }
 
-/** How many writes are waiting. Drives the sign-out warning. */
-export async function pendingCount(db: SQLiteDatabase): Promise<number> {
-  const row = await db.getFirstAsync<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM outbox',
-  );
+/**
+ * How many writes are waiting. Drives the sign-out warning.
+ *
+ * Scoped to one account when given an owner, because "3 records haven't been
+ * backed up yet" is a statement about the account the owner is about to leave.
+ * Counting another account's stuck entries — or unclaimed ones that are not
+ * going anywhere until they are claimed — would warn about records this
+ * sign-out cannot affect.
+ *
+ * Passing `undefined` counts the whole queue, which is what the devices screen
+ * wants when it is reporting on the device rather than on a session.
+ */
+export async function pendingCount(
+  db: SQLiteDatabase,
+  owner?: string | null,
+): Promise<number> {
+  const row =
+    owner === undefined
+      ? await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM outbox')
+      : await db.getFirstAsync<{ n: number }>(
+          owner === null
+            ? 'SELECT COUNT(*) AS n FROM outbox WHERE user_id IS NULL'
+            : 'SELECT COUNT(*) AS n FROM outbox WHERE user_id = ?',
+          owner === null ? [] : [owner],
+        );
   return row?.n ?? 0;
 }

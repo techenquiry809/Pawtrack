@@ -8,9 +8,26 @@ import type { ExpoConfig } from 'expo/config';
  * secrets, never in this file — it is committed to git.
  */
 
-// IMPORTANT: these identifiers are permanent once you publish to the stores.
-// Change them BEFORE your first submission, never after.
+/**
+ * IMPORTANT: these identifiers are permanent once you publish to the stores.
+ * Change them BEFORE your first submission, never after.
+ *
+ * ── com.pawtrack.app IS NOT AVAILABLE ON APPLE'S SIDE ─────────────────
+ *
+ * Registering it fails: "The app identifier com.pawtrack.app cannot be
+ * registered to your development team because it is not available." Bundle
+ * identifiers are globally unique across every Apple developer account, and
+ * this one is already claimed by someone else — so this project can never
+ * ship under it, whatever happens locally.
+ *
+ * That decision is not made here. `IOS_BUNDLE_ID` overrides it for a device
+ * build so testing is not blocked on choosing the permanent name, and the
+ * default is left exactly as it was. Android is untouched: its package name
+ * has no such registry and `com.pawtrack.app` is free to keep there, though
+ * matching the two is worth doing when the real identifier is picked.
+ */
 const BUNDLE_ID = 'com.pawtrack.app';
+const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID ?? BUNDLE_ID;
 
 const config: ExpoConfig = {
   name: 'PawTrack',
@@ -24,12 +41,36 @@ const config: ExpoConfig = {
 
   ios: {
     supportsTablet: true,
-    bundleIdentifier: BUNDLE_ID,
+    bundleIdentifier: IOS_BUNDLE_ID,
+    /**
+     * The Apple team the app AND its extensions are signed by.
+     *
+     * Needed because the app is no longer a single target: the Record Seizure
+     * widget (targets/seizure/) is a second bundle id, and Xcode will not pick
+     * a signing team for an extension on its own. Without this, a local
+     * `expo run:ios` fails at the widget target with "Signing for
+     * 'SeizureWidget' requires a development team" — the app itself builds
+     * fine, which makes it a confusing failure.
+     *
+     * From the environment because it is account-specific: a fork or a
+     * contributor builds under their own team, and hardcoding mine would make
+     * this file something every one of them has to edit and remember not to
+     * commit. EAS supplies its own credentials and does not need it.
+     */
+    appleTeamId: process.env.APPLE_TEAM_ID,
     // Sign in with Apple. NOT optional: App Store guideline 4.8 requires an
     // equivalent privacy-preserving option wherever a third-party social login
     // is offered, and this app offers Google. Shipping Google without this is
     // a guaranteed rejection.
-    usesAppleSignIn: true,
+    /*
+      Disabled only when APPLE_PERSONAL_TEAM=1 — a free Apple team cannot
+      provision this capability, and leaving it on makes an on-device build
+      fail at signing with a message that names a missing profile rather than
+      the capability behind it. Default stays `true`: guideline 4.8 requires
+      it wherever Google sign-in is offered, and the flag is local-only so it
+      cannot follow a build to EAS. See plugins/withPersonalTeamEntitlements.
+    */
+    usesAppleSignIn: process.env.APPLE_PERSONAL_TEAM !== '1',
     // iOS shows these strings in the permission dialog. Apple REJECTS apps
     // whose strings are vague, so each one names the concrete user benefit.
     //
@@ -108,6 +149,51 @@ const config: ExpoConfig = {
       // off modern devices comes from ./plugins/withCappedLegacyStorage.
       'WRITE_EXTERNAL_STORAGE',
     ],
+
+    /*
+      PERMISSIONS THAT MUST NOT SURVIVE INTO THE MANIFEST.
+
+      `permissions` above is additive — it cannot take anything away, and two
+      sources add entries we never asked for:
+
+        * Expo's bare-minimum manifest template, which seeds SYSTEM_ALERT_WINDOW
+          under a comment literally reading "OPTIONAL PERMISSIONS, REMOVE
+          WHATEVER YOU DO NOT NEED" (@expo/config-plugins → withAndroidBaseMods).
+        * library manifests merged in by Gradle — expo-image-picker and
+          expo-media-library both declare the full READ_MEDIA_* set.
+
+      Each entry here becomes `tools:node="remove"`, so the merged manifest
+      comes out without it whoever asked for it.
+
+      ── WHY EACH ONE GOES ──────────────────────────────────────────────
+
+      SYSTEM_ALERT_WINDOW — "draw over other apps". Nothing in this app draws
+      an overlay. It is a policy-sensitive permission on Play, and shipping it
+      is exactly the over-broad declaration the rule below warns about.
+
+      READ_MEDIA_AUDIO — the app records audio as part of a seizure video
+      (RECORD_AUDIO, which stays), but it never READS audio out of the user's
+      library. Nothing would break; nothing would use it.
+
+      READ_MEDIA_VISUAL_USER_SELECTED — the Android 14 "Select photos" partial
+      grant. Not needed here because both pickers go through the system photo
+      picker (expo-image-picker's default), which returns a URI without any
+      media permission at all. See the note in docs/SECURITY.md.
+
+      ── WHAT DELIBERATELY STAYS ────────────────────────────────────────
+
+      READ_MEDIA_IMAGES and READ_MEDIA_VIDEO. Both are genuinely used, and it
+      is worth writing down which is which so neither gets trimmed later on the
+      assumption that this app only handles video:
+
+        images → the dog's profile photo, src/services/dogPhotoService.ts:53,75
+        video  → importing a seizure recording, src/services/videoService.ts:188,228
+    */
+    blockedPermissions: [
+      'android.permission.SYSTEM_ALERT_WINDOW',
+      'android.permission.READ_MEDIA_AUDIO',
+      'android.permission.READ_MEDIA_VISUAL_USER_SELECTED',
+    ],
   },
 
   /**
@@ -132,13 +218,33 @@ const config: ExpoConfig = {
    * so there is nothing to remove; they earn entries when the vet report ships.
    */
   plugins: [
+    /*
+      FIRST in this list, which makes it run LAST.
+      Expo composes mods by wrapping: the plugin registered last runs first,
+      then delegates inward to the ones registered before it. This one deletes
+      entitlements that expo-notifications and expo-apple-authentication add,
+      so it has to run after both — which means being written before both.
+      Registered at the end it ran first, stripped nothing that existed yet,
+      and the two keys were added straight back afterwards.
+      A no-op unless APPLE_PERSONAL_TEAM=1.
+    */
+    './plugins/withPersonalTeamEntitlements',
+
     'expo-router',
     [
       'expo-notifications',
       {
         // Local notifications only — medication reminders. There is no push
         // server; nothing about the dog leaves the device.
-        icon: './assets/icon.png',
+        //
+        // NOT './assets/icon.png'. Android draws the status-bar icon from the
+        // ALPHA CHANNEL alone: every opaque pixel becomes white, every colour
+        // is discarded. A full-bleed app icon has no transparency, so it
+        // arrived as a solid white square. This asset is the paw silhouette on
+        // a transparent field, cropped to fill the 24dp frame — the plugin
+        // rescales it into drawable-mdpi…xxxhdpi as `notification_icon`.
+        icon: './assets/notification-icon.png',
+        // Tints that silhouette and the app name in the banner header.
         color: '#2F7E86',
       },
     ],
@@ -185,6 +291,24 @@ const config: ExpoConfig = {
     // MUST come after expo-media-library: it caps the legacy storage
     // permissions that plugin adds uncapped. See the file for why.
     './plugins/withCappedLegacyStorage',
+
+    /*
+     * The Record Seizure widget, one platform each.
+     *
+     * Both halves open the same URL — pawtrack://seizure/start, handled by
+     * app/seizure/start.tsx — and both are generated at prebuild time because
+     * /ios and /android are gitignored build output in this project. Native
+     * code committed into either would be deleted by the next
+     * `expo prebuild --clean`, silently taking the widget off every home
+     * screen at the following release.
+     *
+     * @bacons/apple-targets links targets/seizure/ as a WidgetKit extension;
+     * withSeizureWidget writes the Android AppWidgetProvider and its
+     * resources. Neither works in Expo Go — a widget is native code outside
+     * the JS bundle, so this needs a development build.
+     */
+    '@bacons/apple-targets',
+    './plugins/withSeizureWidget',
   ],
 
   experiments: {

@@ -53,6 +53,44 @@ const NARROW_SCREEN = 360;
 
 const BASE_ISLAND_HEIGHT = 64;
 
+/**
+ * How far the Record disc stands proud of the island's top edge.
+ *
+ * ── WHY IT OVERHANGS AT ALL ───────────────────────────────────────────
+ *
+ * Because a row of five equal columns makes the one time-critical control in
+ * the app look like a fifth tab. Lifting the disc past the bar's edge is what
+ * separates "the thing you press when something is happening" from "the
+ * things you press to look around".
+ *
+ * ── AND WHY ONLY 6pt ──────────────────────────────────────────────────
+ *
+ * This button used to float free above the bar, and it was moved down for a
+ * real reason: it covered whatever was beneath it — on the check-in form it
+ * sat squarely over the Water row. A small overhang buys the separation
+ * without the collision, and `contentClearance` below reserves exactly this
+ * much extra so no screen can put content under the part that sticks out.
+ *
+ * ── IT CRESTS THE TOP ONLY, AND THAT IS THE POINT ─────────────────────
+ *
+ * A version of this straddled the bar, cresting both edges. It cannot be
+ * small: a circle that clears both edges of a 64pt bar is at least 64pt
+ * across, nearly twice the 38pt glyph slots beside it, and it leaves no strip
+ * of bar underneath to print "Record" on. It looked like an ornament the bar
+ * was passing behind, and it cost the one word that tells somebody what the
+ * red disc does.
+ *
+ * Cresting the top only keeps the disc at 46 and keeps the label. 8, not the
+ * 20 this was first set to — twenty read as a detached floating button, and
+ * below about 6 the crest disappears into the bar's own edge highlight and
+ * the disc just looks oversized.
+ *
+ * Exported so FloatingTabBar positions the disc from the same number the
+ * padding is computed from. Two constants would drift, and the failure would
+ * be a scroll list tucking its last row under the disc.
+ */
+export const RECORD_OVERHANG = 8;
+
 export type ChromeMetrics = {
   /** Island height, grown for large OS text. */
   islandHeight: number;
@@ -62,11 +100,12 @@ export type ChromeMetrics = {
   islandWidth: number;
   islandRadius: number;
   /**
-   * Bottom padding a scrolling screen needs so its last row clears the island.
+   * Bottom padding a scrolling screen needs so its last row clears the island
+   * AND the part of the Record disc that stands above it.
    *
-   * It used to also clear a floating Record button that hovered above the bar.
-   * That button now lives INSIDE the island, so every screen gets those ~72pt
-   * of wrongly-reserved padding back.
+   * It once reserved ~72pt for a Record button that floated free of the bar.
+   * The disc now only overhangs by RECORD_OVERHANG, so this is that much
+   * rather than the old full float — see the note on that constant.
    */
   contentClearance: number;
 };
@@ -92,6 +131,6 @@ export function useChromeMetrics(): ChromeMetrics {
     islandBottom,
     islandWidth,
     islandRadius: Math.round(islandHeight / 2),
-    contentClearance: islandBottom + islandHeight + 16,
+    contentClearance: islandBottom + islandHeight + RECORD_OVERHANG + 16,
   };
 }

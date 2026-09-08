@@ -44,9 +44,13 @@ function freshDb(): DatabaseSync {
       attempts    INTEGER NOT NULL DEFAULT 0,
       last_error  TEXT,
       -- Migration 12. Nullable: NULL means "never attempted".
-      last_attempt_at INTEGER
+      last_attempt_at INTEGER,
+      -- Migration 13. Nullable: NULL means "queued while signed out", i.e.
+      -- belonging to no account yet and not pushable until claimed.
+      user_id     TEXT
     );
     CREATE UNIQUE INDEX idx_outbox_row ON outbox(table_name, row_id);
+    CREATE INDEX idx_outbox_owner ON outbox(user_id, id);
 
     CREATE TABLE seizures (
       id         TEXT PRIMARY KEY NOT NULL,
@@ -73,16 +77,20 @@ function freshDb(): DatabaseSync {
 }
 
 /** Byte-for-byte the statement in src/db/outbox.ts enqueue(). */
-const ENQUEUE_SQL = `INSERT INTO outbox (table_name, row_id, op, queued_at)
-     VALUES (?, ?, ?, ?)
+const ENQUEUE_SQL = `INSERT INTO outbox (table_name, row_id, op, queued_at, user_id)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(table_name, row_id) DO UPDATE SET
        op = CASE
               WHEN excluded.op = 'delete' OR outbox.op = 'delete' THEN 'delete'
               ELSE excluded.op
             END,
        queued_at = excluded.queued_at,
+       user_id = excluded.user_id,
        attempts = 0,
        last_error = NULL`;
+
+/** Byte-for-byte the statement in src/db/outbox.ts peek(). */
+const PEEK_SQL = 'SELECT * FROM outbox WHERE user_id = ? ORDER BY id LIMIT ?';
 
 function enqueue(
   db: DatabaseSync,
@@ -90,8 +98,16 @@ function enqueue(
   rowId: string,
   op: 'upsert' | 'delete',
   now = Date.now(),
+  owner: string | null = null,
 ): void {
-  db.prepare(ENQUEUE_SQL).run(table, rowId, op, now);
+  db.prepare(ENQUEUE_SQL).run(table, rowId, op, now, owner);
+}
+
+/** What a push authenticated as `owner` would actually drain. */
+function drainableBy(db: DatabaseSync, owner: string): string[] {
+  return (db.prepare(PEEK_SQL).all(owner, 200) as { row_id: string }[]).map(
+    (r) => r.row_id,
+  );
 }
 
 function queued(db: DatabaseSync): { table_name: string; row_id: string; op: string }[] {
@@ -387,4 +403,96 @@ test('a failing entry keeps its place in the queue while it backs off', () => {
   assert.equal(rows[0]?.attempts, 4);
   assert.equal(rows[1]?.attempts, 0);
   db.close();
+});
+
+/* ------------------------------------------------------------------ */
+/* The cross-account fence (migration 13)                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One phone can hold rows for more than one account over its life, and
+ * sign-out deliberately does NOT block on an undrained queue. Before the
+ * user_id column existed, peek() was `SELECT * FROM outbox ORDER BY id` — so
+ * a write queued by account A was drained on whatever session happened to be
+ * signed in when the phone next found signal.
+ *
+ * That is not caught by RLS. The push strips user_id and lets the server
+ * stamp auth.uid(), so the write arrives as a correctly-authenticated write
+ * by B of a row B never owned. These tests pin the fence that stops it.
+ */
+
+test("a write queued by one account is never drained on another's session", () => {
+  const db = freshDb();
+  const ACCOUNT_A = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const ACCOUNT_B = 'bbbbbbbb-0000-0000-0000-000000000002';
+
+  // A logs a seizure. The push fails, or the phone is offline, or A simply
+  // signs out before the next sync — the entry outlives the session.
+  enqueue(db, 'seizures', 'a_seizure', 'upsert', 1_000, ACCOUNT_A);
+
+  // A different person signs in on the same phone and syncs.
+  assert.deepEqual(
+    drainableBy(db, ACCOUNT_B),
+    [],
+    "account B's push must not carry account A's seizure into B's account",
+  );
+
+  // A's own entry is still there, unharmed, waiting for A to sign back in.
+  assert.deepEqual(drainableBy(db, ACCOUNT_A), ['a_seizure']);
+});
+
+test('an entry queued while signed out is not pushable by whoever signs in next', () => {
+  const db = freshDb();
+  const SOMEONE = 'cccccccc-0000-0000-0000-000000000003';
+
+  // Written with no account: user_id IS NULL. These rows belong to nobody
+  // yet, and become pushable by being CLAIMED, not by someone signing in.
+  enqueue(db, 'seizures', 'unclaimed', 'upsert', 1_000, null);
+
+  assert.deepEqual(
+    drainableBy(db, SOMEONE),
+    [],
+    'unclaimed rows must not ride into the first account that signs in',
+  );
+});
+
+test('claiming re-stamps the queued entry, which is what makes it pushable', () => {
+  const db = freshDb();
+  const NEW_ACCOUNT = 'dddddddd-0000-0000-0000-000000000004';
+
+  // Used offline, no account.
+  enqueue(db, 'seizures', 's1', 'upsert', 1_000, null);
+  enqueue(db, 'dogs', 'd1', 'upsert', 1_001, null);
+  assert.deepEqual(drainableBy(db, NEW_ACCOUNT), [], 'nothing to push yet');
+
+  // Sign up. adoptOrphanedLocalData() assigns the rows and re-enqueues with the
+  // new owner — the ON CONFLICT branch updates user_id, which is the point.
+  enqueue(db, 'seizures', 's1', 'upsert', 2_000, NEW_ACCOUNT);
+  enqueue(db, 'dogs', 'd1', 'upsert', 2_000, NEW_ACCOUNT);
+
+  assert.deepEqual(
+    drainableBy(db, NEW_ACCOUNT).sort(),
+    ['d1', 's1'],
+    'claimed rows must now be pushable, and the re-stamp must not duplicate them',
+  );
+
+  // Still one entry per row: the unique index held across the re-stamp.
+  const rows = db.prepare('SELECT COUNT(*) AS n FROM outbox').get() as { n: number };
+  assert.equal(rows.n, 2, 'claiming must re-stamp entries, not add new ones');
+});
+
+test('two accounts queueing the same row id stay separated', () => {
+  const db = freshDb();
+  const ACCOUNT_A = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const ACCOUNT_B = 'bbbbbbbb-0000-0000-0000-000000000002';
+
+  // The unique index is on (table_name, row_id) and deliberately NOT on the
+  // owner, so this is a re-stamp rather than a second entry. The row itself
+  // can only belong to one account, so the last writer is the right answer —
+  // what must never happen is BOTH accounts being able to drain it.
+  enqueue(db, 'seizures', 'shared', 'upsert', 1_000, ACCOUNT_A);
+  enqueue(db, 'seizures', 'shared', 'upsert', 2_000, ACCOUNT_B);
+
+  assert.deepEqual(drainableBy(db, ACCOUNT_A), []);
+  assert.deepEqual(drainableBy(db, ACCOUNT_B), ['shared']);
 });

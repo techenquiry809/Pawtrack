@@ -165,6 +165,11 @@ export async function upsertCheckinForDate(
    * therefore safe — it just means a tombstoned check-in still reserves its
    * day locally until the tombstone is purged.
    */
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     const written = await db.getFirstAsync<{ id: string }>(
       `INSERT INTO daily_checkins (
@@ -184,23 +189,23 @@ export async function upsertCheckinForDate(
          -- Once backfilled, always backfilled: editing a recalled entry does not
          -- turn it into a same-day observation.
          backfilled  = MAX(daily_checkins.backfilled, excluded.backfilled),
-         -- The owner has now actually described this day, so the row stops
+         -- The rowOwner has now actually described this day, so the row stops
          -- being mood-only and rejoins the control dataset.
          mood_only   = 0,
          updated_at  = excluded.updated_at,
-         -- An edit revives a day the owner had deleted. Without this the row
+         -- An edit revives a day the rowOwner had deleted. Without this the row
          -- stays tombstoned and the check-in they just typed is invisible.
          deleted_at  = NULL
        RETURNING id`,
       [
-        uid(), newRowOwner(), dogId, timestamp, dayKey, input.sleepHrs,
+        uid(), rowOwner, dogId, timestamp, dayKey, input.sleepHrs,
         input.appetite, input.water, input.energy, input.stress,
         toSqlBool(input.medOnTime), input.gi, input.unusual,
         toSqlBool(backfilled), now, now,
       ],
     );
 
-    if (written) await enqueue(db, 'daily_checkins', written.id, 'upsert', now);
+    if (written) await enqueue(db, 'daily_checkins', written.id, 'upsert', rowOwner, now);
   });
 }
 
@@ -251,6 +256,11 @@ export async function setEnergyForDate(
   const backfilled = dayKey !== today;
   const timestamp = backfilled ? middayOf(dayKey) : now;
 
+  // Captured ONCE for this transaction. `newRowOwner()` reads module-level
+  // session state, and there are `await`s between the row write and its
+  // outbox entry — so calling it twice lets a sign-in landing mid-transaction
+  // stamp the row and its queue entry with two different accounts.
+  const rowOwner = newRowOwner();
   await db.withTransactionAsync(async () => {
     const written = await db.getFirstAsync<{ id: string }>(
       `INSERT INTO daily_checkins (
@@ -259,19 +269,19 @@ export async function setEnergyForDate(
        ) VALUES (?,?,?,?,?,?,?,1,?,?)
        ON CONFLICT(dog_id, check_in_date) DO UPDATE SET
          -- Deliberately ONLY these. Every other column on an existing row is
-         -- an answer the owner gave, and a mood tap must not disturb it.
+         -- an answer the rowOwner gave, and a mood tap must not disturb it.
          energy     = excluded.energy,
          updated_at = excluded.updated_at,
-         -- A tap revives a day the owner had deleted, same as the form does.
+         -- A tap revives a day the rowOwner had deleted, same as the form does.
          deleted_at = NULL
        RETURNING id`,
       [
-        uid(), newRowOwner(), dogId, timestamp, dayKey, energy,
+        uid(), rowOwner, dogId, timestamp, dayKey, energy,
         toSqlBool(backfilled), now, now,
       ],
     );
 
-    if (written) await enqueue(db, 'daily_checkins', written.id, 'upsert', now);
+    if (written) await enqueue(db, 'daily_checkins', written.id, 'upsert', rowOwner, now);
   });
 }
 

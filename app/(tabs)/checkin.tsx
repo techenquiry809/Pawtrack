@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Muted, SegmentedControl, Title } from '@/components/ui';
 import { CheckinSection } from '@/components/CheckinSection';
 import { MedicationSection } from '@/components/MedicationSection';
+import { DosePrompt } from '@/components/DosePrompt';
 import { colors, spacing } from '@/theme/tokens';
 import { useChromeMetrics } from '@/theme/chrome';
 import { useActiveDog } from '@/store/appStore';
@@ -35,6 +36,12 @@ export default function CheckinTab() {
   const [section, setSection] = useState<Section>(
     params.section === 'medication' ? 'medication' : 'checkin',
   );
+
+  /**
+   * Bumped when the dose prompt records an answer, so the Medication section
+   * below re-reads instead of still offering buttons for a dose just logged.
+   */
+  const [doseToken, setDoseToken] = useState(0);
 
   if (!dog) return null;
 
@@ -68,8 +75,30 @@ export default function CheckinTab() {
       {section === 'checkin' ? (
         <CheckinSection dogId={dog.id} dogName={dog.name} />
       ) : (
-        <MedicationSection dogId={dog.id} dogName={dog.name} />
+        <MedicationSection
+          dogId={dog.id}
+          dogName={dog.name}
+          reloadToken={doseToken}
+        />
       )}
+
+      {/*
+        Outside the section switch, deliberately.
+
+        The question is about medication, but it is asked of whoever opens
+        this tab — and most people open it for the mood row, not for the
+        Medication section behind the segmented control. Putting it inside
+        that branch would mean only the owners who were already looking at
+        the dose log got asked, which is the group that needs asking least.
+
+        It renders nothing at all when there is no medication, no enabled
+        reminder, or nothing outstanding — see components/DosePrompt.tsx.
+      */}
+      <DosePrompt
+        dogId={dog.id}
+        dogName={dog.name}
+        onRecorded={() => setDoseToken((n) => n + 1)}
+      />
     </ScrollView>
   );
 }

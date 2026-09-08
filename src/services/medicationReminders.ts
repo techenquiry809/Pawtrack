@@ -19,11 +19,18 @@
  *
  * ── WHAT A NOTIFICATION MAY SAY ───────────────────────────────────────
  *
- * Lock-screen notifications are readable by anyone holding the phone. The body
- * carries the medication name, the dog's name and the prescribed amount, and
- * nothing else. No diagnosis, no condition, no instruction — see the safety
- * rules in docs/ARCHITECTURE.md. It also never tells the owner what to DO
- * about a dose; it states that one is scheduled.
+ * Lock-screen notifications are readable by anyone holding the phone. The
+ * banner carries the medication name, the dog's name and the prescribed
+ * amount, and nothing else. No diagnosis, no condition, no CLINICAL
+ * instruction — see the safety rules in docs/ARCHITECTURE.md. It never tells
+ * the owner what to do about a dose: not to give it, skip it, double it or
+ * delay it. It states that one is scheduled.
+ *
+ * The one instruction it does carry is about the APP — "open PawTrack to
+ * record it" — which is the line between telling someone how to use software
+ * and telling them how to medicate an animal. A reminder that names no next
+ * step gets swiped away and the dose goes unlogged, which is the failure this
+ * whole feature exists to prevent.
  */
 
 import * as Notifications from 'expo-notifications';
@@ -49,9 +56,14 @@ async function ensureAndroidChannel(): Promise<void> {
   await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL, {
     name: 'Medication reminders',
     importance: Notifications.AndroidImportance.HIGH,
-    // No description mentioning seizures — channel names are visible in
-    // system settings, which other people can also read.
+    // No description mentioning seizures — channel names and descriptions are
+    // visible in system settings, which other people can also read. This one
+    // says what the channel does and nothing about why.
+    description: 'Daily reminders at the dose times you set.',
     vibrationPattern: [0, 250, 250, 250],
+    // Tints the small icon and the notification's accent on Android. Matches
+    // the `color` given to the expo-notifications plugin in app.config.ts.
+    lightColor: '#2F7E86',
   });
 }
 
@@ -84,16 +96,23 @@ export async function requestPermission(): Promise<PermissionOutcome> {
   return status === 'denied' ? 'denied' : 'undetermined';
 }
 
-/** "Phenobarbital for River — scheduled dose: 60mg" */
-export function reminderBody(
-  medicationName: string,
-  dogName: string,
-  dose: string,
-  unit: string,
-): string {
+/**
+ * "Phenobarbital for River" — the drug first, because that is the word the
+ * owner is looking for on a lock screen at 8am. A dog with no name recorded
+ * (possible: the field is theirs to fill) drops the suffix rather than
+ * printing "for ".
+ */
+export function reminderTitle(medicationName: string, dogName: string): string {
+  const dog = dogName.trim();
+  return dog ? `${medicationName} for ${dog}` : medicationName;
+}
+
+/** "Scheduled dose: 60mg. Open PawTrack to record it." */
+export function reminderBody(dose: string, unit: string): string {
   const amount = [dose.trim(), unit.trim()].filter(Boolean).join('');
-  const base = `${medicationName} for ${dogName}`;
-  return amount ? `${base} — scheduled dose: ${amount}` : base;
+  const scheduled = amount ? `Scheduled dose: ${amount}.` : 'Scheduled dose.';
+  // The only instruction here is about the app. See the header note.
+  return `${scheduled} Open PawTrack to record it.`;
 }
 
 function parseHHMM(timeHHMM: string): { hour: number; minute: number } | null {
@@ -127,13 +146,20 @@ export async function scheduleReminder(reminder: {
 
   const notificationId = await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'Medication reminder',
-      body: reminderBody(
-        reminder.medicationName, reminder.dogName, reminder.dose, reminder.unit,
-      ),
-      // Lets a tap open straight to the medication section.
+      title: reminderTitle(reminder.medicationName, reminder.dogName),
+      body: reminderBody(reminder.dose, reminder.unit),
+      // Read by the tap handler in app/_layout.tsx, which opens Check-in —
+      // the screen that lists today's doses and records them.
       data: { kind: 'medication-reminder', reminderId: reminder.id },
-      ...(Platform.OS === 'android' ? { channelId: ANDROID_CHANNEL } : {}),
+      ...(Platform.OS === 'android'
+        ? {
+            channelId: ANDROID_CHANNEL,
+            // Heads-up banner rather than a silent tray entry. A dose time
+            // that arrives quietly is a dose time that is missed.
+            priority: Notifications.AndroidNotificationPriority.HIGH,
+            color: '#2F7E86',
+          }
+        : {}),
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.DAILY,

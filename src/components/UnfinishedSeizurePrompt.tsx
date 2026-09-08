@@ -47,7 +47,28 @@ export function UnfinishedSeizurePrompt() {
 
   const check = useCallback(async () => {
     try {
-      setOrphan(await seizureRepo.findUnfinishedSeizure());
+      const found = await seizureRepo.findUnfinishedSeizure();
+      /*
+       * The seizure being lived through RIGHT NOW is an `in_progress` row too,
+       * so this query returns it — and remembering it is the bug below.
+       *
+       * ── WHY THIS IS DISCARDED RATHER THAN STORED AND FILTERED ─────────
+       *
+       * The render guard already refuses to show a prompt while a draft is
+       * live, which looks like enough and is not. The check can land DURING
+       * the seizure (it runs on every foreground, and a seizure is exactly
+       * when someone puts the phone down and picks it up again), storing the
+       * live row in state. The guard then hides it — until the flow ends and
+       * `activeDraft` goes null, at which point the stale answer renders and
+       * announces "an unfinished recording" about the seizure that was just
+       * saved or discarded a second earlier.
+       *
+       * Observed exactly that way: start a seizure, background and foreground
+       * the app, discard it, and the prompt appears for the row that had just
+       * been abandoned. On this app that reads as "your record did not save",
+       * which is the single most alarming thing it could say wrongly.
+       */
+      setOrphan(useActiveSeizure.getState().draft ? null : found);
     } catch (error) {
       console.error('[recovery] orphan lookup failed', error);
     }
@@ -64,6 +85,20 @@ export function UnfinishedSeizurePrompt() {
     });
     return () => sub.remove();
   }, [check, hydrated]);
+
+  /**
+   * Re-ask the moment a live seizure ends.
+   *
+   * The row this component cares about has just changed status — to
+   * `complete` on the recovery screen, or `abandoned` on a discard — so the
+   * answer from before the flow is worthless either way. Asking again is one
+   * indexed query against a status column, and it is what makes the end of a
+   * seizure quiet instead of raising a prompt about itself.
+   */
+  useEffect(() => {
+    if (!hydrated || activeDraft) return;
+    void check();
+  }, [hydrated, activeDraft, check]);
 
   // A seizure being recorded RIGHT NOW is an in_progress row too. Never prompt
   // about the one the owner is actively living through.
