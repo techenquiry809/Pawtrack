@@ -13,6 +13,40 @@ const config: ExpoConfig = {
 
   icon: './assets/icon.png',
 
+  /**
+   * The colour behind the React views, and behind the native launch window.
+   *
+   * ── WHY THIS IS HERE AT ALL ───────────────────────────────────────────
+   *
+   * Nothing set it, so the launch window fell back to the platform default —
+   * on a dark-themed Android device that is near-black. Captured on a release
+   * build: at 0.72s the screen is #2E2E2E, and the app it hands over to is
+   * #F6F2EA. A near-black flash in front of a cream app is the "jarring gap"
+   * on a cold start, and no amount of JS-side animation can cover it, because
+   * it happens before any JS has run.
+   *
+   * `#F6F2EA` is `colors.bg` from src/theme/tokens.ts. Written as a literal
+   * because this file is evaluated by the Expo CLI outside the app's module
+   * graph and cannot resolve the `@/` alias — keep the two in step by hand.
+   */
+  backgroundColor: '#F6F2EA',
+
+  /*
+   * There is deliberately no `splash` block. SDK 57 moved that config to the
+   * expo-splash-screen plugin, which this project does not depend on, and the
+   * pre-JS window is already handled by `backgroundColor` above. The residual
+   * step is white (the generated splashscreen_background) to cream, which is
+   * mild; closing it fully means adding that package.
+   *
+   * A brand image is not the missing piece either. Every raster this project
+   * ships — icon.png, splash-icon.png, android-icon-foreground.png — draws the
+   * paw in WHITE for a blue or transparent ground, so on #F6F2EA the paw
+   * vanishes and only the blue pulse trace survives, reading as a stray
+   * squiggle rather than a logo. The animated mark in
+   * src/components/AnimatedSplash.tsx is drawn from the app's own icon set in
+   * theme colours instead, which needs no new asset.
+   */
+
   ios: {
     supportsTablet: true,
     bundleIdentifier: IOS_BUNDLE_ID,
@@ -69,10 +103,15 @@ const config: ExpoConfig = {
     // schedule notifications — native config lands with the feature that needs
     // it, never ahead of it.
     //
-    // SCHEDULE_EXACT_ALARM stays OUT. A daily medication reminder does not need
-    // to fire to the second, and it is a policy-restricted permission that
-    // requires a Play Console declaration form. An inexact daily alarm is the
-    // right trade.
+    // The exact-alarm permissions are NOT in this list — they need a
+    // maxSdkVersion attribute that `permissions` cannot express, so they are
+    // added by ./plugins/withExactAlarms.
+    //
+    // That file replaces the reasoning that used to sit here ("an inexact
+    // daily alarm is the right trade"), which was wrong in a way only a device
+    // shows: inexact does not mean "a few seconds of drift", it means the OS
+    // batches the alarm into its next Doze maintenance window. Observed: a
+    // 5:30 reminder delivered at 5:32, and only once the phone was picked up.
     permissions: [
       'CAMERA',
       'RECORD_AUDIO',
@@ -232,6 +271,13 @@ const config: ExpoConfig = {
     // MUST come after expo-media-library: it caps the legacy storage
     // permissions that plugin adds uncapped. See the file for why.
     './plugins/withCappedLegacyStorage',
+
+    /*
+     * Exact alarms for medication reminders. A manifest mod for the same
+     * reason as the one above: `android.permissions` has nowhere to put
+     * `android:maxSdkVersion`. See the file for the Play policy note.
+     */
+    './plugins/withExactAlarms',
 
     /*
      * The Record Seizure widget, one platform each.
