@@ -1,157 +1,99 @@
 /**
- * The launch screen: the app's mark, breathing, on the app's own background.
+ * The launch intro: the branded video, played once, full-bleed.
  *
- * ── WHAT THIS REPLACED, AND WHY ───────────────────────────────────────
+ * ── WHY THIS ISN'T THE NATIVE LAUNCH SCREEN ───────────────────────────
  *
- * A full-bleed 3-second brand video. Measured on a release build on a real
- * device, startup finished at 139ms and Home was painted and settled by 507ms,
- * so the clip held the window for about three seconds after the app was ready.
- * Cutting it short did not help either: a video stopped a fifth of the way in
- * reads as a playback failure, not as a fast launch.
+ * Neither iOS nor Android can play video from the pre-JS launch screen (the
+ * storyboard / windowBackground shown before the bridge starts) — that surface
+ * only supports a static image. So the native launch screen stays a plain
+ * background for the brief moment before JS boots, and this component takes
+ * over the instant it does, filling the whole window before anything else in
+ * the tree gets a frame.
  *
- * A loading state has to look deliberate at ANY duration, because it cannot
- * know in advance how long it has. A loop does; a linear clip does not. So the
- * mark breathes on a slow cycle and leaves whenever startup says so — at
- * 700ms on a warm device, at three seconds on a cold one — and looks the same
- * either way.
+ * ── IT ENDS WHEN THE APP IS READY, NOT WHEN THE CLIP IS ───────────────
  *
- * The clip is still in assets/. If it is wanted, first-run onboarding is where
- * a brand film belongs — somewhere it can play to the end, once, rather than
- * in front of an app someone opened because their dog is having a seizure.
+ * This used to hold the window until the video played out. Measured on a
+ * release build on a real device, that was 3625ms of intro in front of an app
+ * that finished starting at 139ms and had Home painted and settled by 507ms —
+ * about three seconds of watching a logo for no reason.
  *
- * ── WHY THE MARK IS DRAWN AND NOT ONE OF THE BRAND PNGs ───────────────
+ * So `canFinish` (startup done) is what ends it now. The clip is still the
+ * thing being shown; it is simply no longer the thing being waited for. The
+ * three timings that remain each guard a different failure:
  *
- * Every raster this project ships — icon.png, splash-icon.png,
- * android-icon-foreground.png — draws the paw in WHITE, for a blue or
- * transparent ground. On `colors.bg` (#F6F2EA) the paw disappears entirely and
- * only the blue pulse trace survives, which reads as a stray squiggle. So the
- * paw comes from the app's own icon set (Ionicons, the same family `Icon`
- * wraps and the same glyph the profile row uses) in `colors.teal`, which is a
- * token, on a token background. No new asset, no invented colour.
+ *   MIN_INTRO_MS   a floor, so a fast cold start does not flash the intro for
+ *                  three frames — which reads as a glitch, not as speed
+ *   playToEnd      the clip finishing is still a perfectly good reason to go,
+ *                  and on a slow start it is what fires first
+ *   MAX_INTRO_MS   a ceiling, for a file that fails to decode or a startup
+ *                  that never reports. Never reached in normal operation.
  *
- * ── THE MOTIF IS THE ONE THE BRAND ALREADY USES ───────────────────────
+ * ── AND IT FADES ──────────────────────────────────────────────────────
  *
- * The logo is a paw with a pulse trace through the pad. A slow scale-and-fade
- * is that same idea in time rather than in line: a heartbeat, at rest. It is
- * kept deliberately gentle — this screen belongs to an app people open at 3am
- * after a bad night, and an energetic spinner would be the wrong tone even if
- * it were more interesting to look at.
- *
- * ── IT ENDS WHEN THE APP IS READY ─────────────────────────────────────
- *
- *   MIN_VISIBLE_MS  a floor, so a fast cold start does not flash the mark for
- *                   three frames — which reads as a glitch, not as speed
- *   canFinish       startup settled, or failed; both are reasons to get out of
- *                   the way
- *   MAX_VISIBLE_MS  a ceiling, for a startup that never reports at all
- *
- * ── REDUCED MOTION ────────────────────────────────────────────────────
- *
- * The mark is rendered at rest and does not pulse, and the fade is skipped.
- * The screen still appears and still hands over — it simply stops moving. See
+ * Cutting from a full-bleed video to the Home screen in one frame reads as the
+ * app restarting. The fade is short enough not to be a wait and long enough to
+ * be a handoff. Skipped under Reduce Motion, where the swap is instant — see
  * src/theme/motion.ts on why that setting is honoured rather than negotiated.
+ *
+ * ── contentFit="cover", NOT "contain" ─────────────────────────────────
+ *
+ * The source clip is a fixed 9:16 recording. Every phone and tablet has a
+ * different aspect ratio, and "contain" would letterbox on all of them —
+ * exactly the "not built for my device" look this is meant to avoid. "cover"
+ * fills the frame on any screen size, cropping only the edges, which is the
+ * standard full-bleed technique and needs no per-device math.
  */
 
 import { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Animated, Easing, StyleSheet } from 'react-native';
+import { useVideoPlayer, VideoView } from 'expo-video';
 
-import { colors, fontFamily, fontSize, spacing } from '@/theme/tokens';
+import { colors } from '@/theme/tokens';
 import { useReducedMotion } from '@/theme/motion';
 
-/** A floor, so a 140ms startup does not strobe the mark. */
-const MIN_VISIBLE_MS = 700;
+const SPLASH_VIDEO = require('../../assets/splash-video.mp4');
 
-/** A ceiling, for a startup that never reports. Never reached in practice. */
-const MAX_VISIBLE_MS = 6000;
-
-/** The handoff out. Matches `duration.enter` in the motion tokens. */
-const FADE_MS = 320;
-
-/** The handoff in. Shorter: arriving should not itself feel like waiting. */
-const FADE_IN_MS = 180;
-
-/** One breath. Slow enough to read as calm rather than as a spinner. */
-const PULSE_MS = 1400;
+// If the file fails to decode or playback stalls, the app must not be stuck
+// behind an intro forever — this is well past the clip's own ~3s length.
+const MAX_INTRO_MS = 6000;
 
 /**
- * Display size for the mark.
+ * The floor.
  *
- * Deliberately NOT from `ICON_SIZE`: that scale tops out at a size meant for a
- * row or a tab bar, and this is the only place in the app where the glyph is
- * the subject rather than a label for something else.
+ * Startup lands at ~140ms on a warm device, and dismissing at 140ms would show
+ * two or three frames of video and then something else — which looks like a
+ * failed load rather than a fast launch. Long enough for the mark to register
+ * as deliberate, short enough that nobody waits on it.
  */
-const MARK_SIZE = 76;
+const MIN_INTRO_MS = 700;
+
+/** The handoff. Matches `duration.enter` in the motion tokens. */
+const FADE_MS = 320;
 
 export function AnimatedSplash({
   canFinish,
   onFinish,
 }: {
   /**
-   * True once startup has settled — or failed. Both are reasons to leave: an
-   * error screen behind a loading mark is worse than no loading mark at all.
+   * True once startup has settled — or failed. Both are reasons to get out of
+   * the way: an error screen behind an intro is worse than no intro at all.
    */
   canFinish: boolean;
   onFinish: () => void;
 }) {
-  const reducedMotion = useReducedMotion();
   const finishedRef = useRef(false);
   const mountedAt = useRef(Date.now());
+  const opacity = useRef(new Animated.Value(1)).current;
+  const reducedMotion = useReducedMotion();
+
+  const player = useVideoPlayer(SPLASH_VIDEO, (instance) => {
+    instance.loop = false;
+    instance.play();
+  });
 
   /**
-   * Whole-screen opacity: fades IN over the plain cover the root layout holds
-   * while it works out what launched the app, and OUT into the app itself.
-   *
-   * Starting at 0 rather than 1 is what stops the mark popping into existence
-   * against a cover that is already the same colour — the cover, this screen
-   * and the native launch window are all `colors.bg`, so the only thing that
-   * should ever appear or disappear is the mark.
-   */
-  const fade = useRef(new Animated.Value(0)).current;
-  /** 0 → 1 → 0, the breath. Drives scale and the mark's own opacity together. */
-  const pulse = useRef(new Animated.Value(0)).current;
-
-  // Fade in. Instant under reduced motion, where the screen must still appear.
-  useEffect(() => {
-    if (reducedMotion) {
-      fade.setValue(1);
-      return;
-    }
-    Animated.timing(fade, {
-      toValue: 1,
-      duration: FADE_IN_MS,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
-    }).start();
-  }, [fade, reducedMotion]);
-
-  // Native-driven, so a busy JS thread during startup — which is exactly what
-  // this screen is covering — cannot make the breath stutter.
-  useEffect(() => {
-    if (reducedMotion) return;
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: PULSE_MS / 2,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: PULSE_MS / 2,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [pulse, reducedMotion]);
-
-  /**
-   * Held in a ref so the floor timer and the ceiling timer can both start the
-   * leave sequence without either re-subscribing the other.
+   * Kept in a ref so the leave sequence can be started from a listener, a
+   * timer or a prop change without any of them re-subscribing the others.
    */
   const leave = useRef<() => void>(() => {});
   leave.current = () => {
@@ -162,7 +104,7 @@ export function AnimatedSplash({
       onFinish();
       return;
     }
-    Animated.timing(fade, {
+    Animated.timing(opacity, {
       toValue: 0,
       duration: FADE_MS,
       easing: Easing.out(Easing.quad),
@@ -170,66 +112,56 @@ export function AnimatedSplash({
     }).start(() => onFinish());
   };
 
-  // The normal path: startup finished, so go — once the floor has passed. The
-  // remaining wait is measured from mount, so a startup that took 900ms leaves
-  // immediately rather than serving another 700ms on top of it.
+  // The clip ending, a decode failure, and the ceiling. All still apply.
+  useEffect(() => {
+    const playToEndSub = player.addListener('playToEnd', () => leave.current());
+    const statusSub = player.addListener('statusChange', ({ status }) => {
+      if (status === 'error') leave.current();
+    });
+    const timeout = setTimeout(() => leave.current(), MAX_INTRO_MS);
+
+    return () => {
+      playToEndSub.remove();
+      statusSub.remove();
+      clearTimeout(timeout);
+    };
+  }, [player]);
+
+  /**
+   * The normal path: startup finished, so go — once the floor has passed.
+   *
+   * The remaining wait is computed from mount rather than slept for a fixed
+   * period, so a startup that takes 900ms leaves immediately instead of
+   * serving another 700ms on top of it.
+   */
   useEffect(() => {
     if (!canFinish) return;
-    const remaining = Math.max(0, MIN_VISIBLE_MS - (Date.now() - mountedAt.current));
+    const remaining = Math.max(0, MIN_INTRO_MS - (Date.now() - mountedAt.current));
     const timer = setTimeout(() => leave.current(), remaining);
     return () => clearTimeout(timer);
   }, [canFinish]);
 
-  // The ceiling.
-  useEffect(() => {
-    const timer = setTimeout(() => leave.current(), MAX_VISIBLE_MS);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const markStyle = reducedMotion
-    ? { opacity: 1 }
-    : {
-        opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }),
-        transform: [
-          { scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1.04] }) },
-        ],
-      };
-
   return (
-    <Animated.View
-      style={[styles.screen, { opacity: fade }]}
-      pointerEvents="none"
-      accessible
-      accessibilityRole="progressbar"
-      accessibilityLabel="Loading PawTrack"
-    >
-      <Animated.View style={markStyle}>
-        <Ionicons name="paw" size={MARK_SIZE} color={colors.teal} />
-      </Animated.View>
-      <Text style={styles.wordmark}>PawTrack</Text>
+    <Animated.View style={[styles.container, { opacity }]} pointerEvents="none">
+      <VideoView
+        style={styles.video}
+        player={player}
+        contentFit="cover"
+        nativeControls={false}
+        allowsPictureInPicture={false}
+      />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  container: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    // The same colour as `backgroundColor` in app.config.ts, so the native
-    // launch window and this screen are one continuous surface with no seam.
     backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
   },
-  wordmark: {
-    fontFamily: fontFamily.bold,
-    fontSize: fontSize.lg,
-    color: colors.ink,
-    // Slightly open, the way a mark is set rather than a sentence.
-    letterSpacing: 0.5,
-  },
+  video: { flex: 1 },
 });
