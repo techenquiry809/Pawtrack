@@ -29,7 +29,7 @@
  * utils/time.ts for why the two forms are kept apart.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Body, Button, Heading, SegmentedControl } from '@/components/ui';
@@ -37,13 +37,46 @@ import { Dialog } from '@/components/Dialog';
 import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 
 /**
- * Minutes move in fives.
+ * MINUTES MOVE ONE AT A TIME. EVERY TIME IS REACHABLE.
  *
- * A dose is not a thing anyone schedules to the minute, and 60 single steps to
- * cross an hour is a control nobody finishes using. Five covers every time a
- * prescription is actually written at.
+ * This used to step in fives, on the reasoning that "a dose is not a thing
+ * anyone schedules to the minute" and that 60 single taps to cross an hour is a
+ * control nobody finishes using.
+ *
+ * The second half of that was true and the first half was not ours to decide.
+ * Owners in this app already had 5:30, 7:50, 8:00, 10:25 and 2:45 reminders on
+ * one dog — real schedules are built around walks, meals, work and whatever the
+ * vet actually said, and a picker that silently refuses 7:52 is the app
+ * overruling a prescription. Worse, `parse` SNAPPED on open, so an existing
+ * 07:07 reminder became 07:05 the moment someone looked at it, and saving an
+ * unrelated edit wrote the changed time back.
+ *
+ * The tap-count problem is solved where it actually lives — in the button. Hold
+ * either arrow and it repeats, accelerating; see HOLD_DELAY_MS below. An hour is
+ * a second of holding, and no minute is unreachable.
  */
-const MINUTE_STEP = 5;
+const MINUTE_STEP = 1;
+
+/**
+ * How long a press must be held before it starts repeating.
+ *
+ * Long enough that a deliberate single tap never fires twice — the cost of
+ * getting this wrong is an owner nudging a reminder one minute and watching it
+ * run away from them.
+ */
+const HOLD_DELAY_MS = 400;
+
+/** Repeat interval once holding, and the faster one it accelerates into. */
+const HOLD_INTERVAL_MS = 110;
+const HOLD_FAST_MS = 35;
+
+/**
+ * Repeats at HOLD_INTERVAL_MS before dropping to HOLD_FAST_MS.
+ *
+ * Roughly a second of holding at the first speed, which covers a small
+ * correction, before it opens up for someone crossing a whole hour.
+ */
+const HOLD_ACCELERATE_AFTER = 9;
 
 type Meridiem = 'am' | 'pm';
 
@@ -54,9 +87,11 @@ function parse(timeHHMM: string): { hour12: number; minute: number; meridiem: Me
   const minute = Number.isInteger(m) && m! >= 0 && m! <= 59 ? m! : 0;
   return {
     hour12: hour % 12 === 0 ? 12 : hour % 12,
-    // Snapped to the step, so opening the picker on a legacy 07:07 reminder
-    // does not show a value the − and + buttons can never return to.
-    minute: Math.round(minute / MINUTE_STEP) * MINUTE_STEP % 60,
+    // Taken exactly as stored. It used to be snapped to the step so the − and +
+    // buttons could return to it; at a step of one every minute is reachable,
+    // so snapping now has nothing left to protect and would only be a way to
+    // change a reminder nobody asked to change.
+    minute,
     meridiem: hour < 12 ? 'am' : 'pm',
   };
 }
@@ -107,9 +142,16 @@ export function TimePickerDialog({
   // Both wrap. Stepping past 12 back to 1 is what a clock does, and stopping
   // at the end of the range instead would make a late-evening time a long
   // press away from an early-morning one.
-  const stepHour = (delta: number) => setHour12(((hour12 - 1 + delta + 12) % 12) + 1);
+  //
+  // FUNCTIONAL UPDATES, NOT CLOSURE READS. A held button fires these from an
+  // interval whose callback was created once, at press time: reading `hour12`
+  // or `minute` from the closure would compute every repeat from the value as
+  // it was when the finger landed, so holding would move the clock exactly one
+  // step and then appear to jam.
+  const stepHour = (delta: number) =>
+    setHour12((h) => ((h - 1 + delta + 12) % 12) + 1);
   const stepMinute = (delta: number) =>
-    setMinute((minute + delta * MINUTE_STEP + 60) % 60);
+    setMinute((m) => (m + delta * MINUTE_STEP + 60) % 60);
 
   return (
     <Dialog visible={visible} onRequestClose={onCancel}>
@@ -188,6 +230,27 @@ function Stepper({
   );
 }
 
+/**
+ * A − or + that repeats while held.
+ *
+ * ── WHY THIS EXISTS ───────────────────────────────────────────────────
+ *
+ * It is what pays for the minute step being one instead of five. Without it,
+ * moving a reminder from 8:00 to 8:45 is forty-five taps and nobody would; with
+ * it, the same move is a held thumb, and 8:47 is as reachable as 8:45.
+ *
+ * ── WHY onPressIn AND NOT onPress ─────────────────────────────────────
+ *
+ * The first step has to fire on the DOWN edge, because that is the same event
+ * the hold timer starts on. Firing the single step on `onPress` (the up edge)
+ * instead would double-count every hold: one step from the timer's first tick
+ * and another when the finger lifted.
+ *
+ * `onPress` is still declared, because it is what gives the Pressable its
+ * button semantics for assistive tech — a screen reader activating this control
+ * synthesises a press, not a press-in. It is a no-op for touch, which has
+ * already been served by onPressIn.
+ */
 function StepButton({
   glyph,
   label,
@@ -197,9 +260,64 @@ function StepButton({
   label: string;
   onPress: () => void;
 }) {
+  /** Whichever timer is pending — the initial delay, or the repeat interval. */
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Whether onPressIn has already served this interaction.
+   *
+   * Load-bearing, and not obviously so: RN fires onPressOut BEFORE onPress, so
+   * by the time onPress runs the timer has already been cleared and cannot be
+   * used to tell "a touch that was handled on the down edge" from "an assistive
+   * activation that never had one". Without this flag every ordinary tap steps
+   * twice — the minute jumps two at a time and the control feels broken.
+   */
+  const touchHandled = useRef(false);
+  const ticks = useRef(0);
+
+  const stop = () => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+
+  /*
+   * setTimeout re-armed each tick rather than one setInterval, because the rate
+   * CHANGES partway through. An interval cannot be re-timed without being torn
+   * down and rebuilt, which is this same code with an extra failure mode.
+   */
+  const scheduleNext = () => {
+    const delay = ticks.current >= HOLD_ACCELERATE_AFTER ? HOLD_FAST_MS : HOLD_INTERVAL_MS;
+    timer.current = setTimeout(() => {
+      ticks.current += 1;
+      onPress();
+      scheduleNext();
+    }, delay);
+  };
+
+  const begin = () => {
+    touchHandled.current = true;
+    ticks.current = 0;
+    onPress();
+    timer.current = setTimeout(scheduleNext, HOLD_DELAY_MS);
+  };
+
+  // A press that ends anywhere — lift, drag-off, or the dialog closing under
+  // it — must stop the repeat. Leaving one running would keep editing a time
+  // nobody is touching any more.
+  useEffect(() => stop, []);
+
   return (
     <Pressable
-      onPress={onPress}
+      onPressIn={begin}
+      onPressOut={stop}
+      onPress={() => {
+        // Touch was already served on the down edge. This body only does
+        // anything for an assistive-tech activation, which reaches a Pressable
+        // as a bare onPress with no onPressIn before it.
+        if (!touchHandled.current) onPress();
+        touchHandled.current = false;
+      }}
       accessibilityRole="button"
       accessibilityLabel={label}
       hitSlop={8}

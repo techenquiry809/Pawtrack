@@ -71,6 +71,57 @@ export const colors = {
 
   /** The dim behind a modal sheet. */
   scrim: 'rgba(32, 41, 58, 0.45)',
+
+  /**
+   * A FROSTED PANEL — the calendar sheets. See components/GlassBackdrop.tsx.
+   *
+   * Distinct from `onMediaVeil` above, which is a translucent panel over a
+   * known saturated fill and therefore carries almost no white. These sit over
+   * an unknown, moving backdrop — whatever screen the sheet opened on, seen
+   * through `scrim` and a blur — and hold a month of 13pt date numbers. The
+   * material has to stay a READING surface first and an effect second, so the
+   * veil is heavy enough that the panel is legible over anything.
+   *
+   * `glassVeil` is the wash over the blur on the BlurView path. `glassScrim`
+   * is its lighter equivalent over real Liquid Glass, which adapts to its
+   * backdrop on its own and only needs a cap on how much of one colour it can
+   * take on — the same trick, and the same reason, as the tab bar's scrim.
+   *
+   * ── glassScrim WAS TUNED ON A DEVICE, NOT GUESSED ─────────────────────
+   *
+   * It started at 0.28, borrowed from the tab bar's 0.22. On an iPhone 17 Pro
+   * simulator running iOS 26.5 — real Liquid Glass, not the blur fallback —
+   * that let the screen behind the sheet read straight through the month grid:
+   * a visible band across the weekday row and ghosted text between the dimmed
+   * future dates. The panel looked mottled rather than frosted.
+   *
+   * 0.45 is where the backdrop stops competing with the numbers and the panel
+   * still reads as glass — enough motion behind it to be a material, not enough
+   * to be a texture. The tab bar can sit lower because it holds four short
+   * labels; a calendar holds forty.
+   */
+  glassVeil: 'rgba(255, 255, 255, 0.66)',
+  glassScrim: 'rgba(255, 255, 255, 0.45)',
+
+  /**
+   * The lit edge that makes frosted glass read as glass rather than as a
+   * translucent rectangle.
+   *
+   * Two values because a real pane is not lit evenly: light catches the top
+   * edge and falls off. `glassEdge` is that highlight, `glassEdgeSoft` the
+   * border carrying it around the remaining sides at lower strength. Dropping
+   * either is what makes a blur look like a bug.
+   */
+  glassEdge: 'rgba(255, 255, 255, 0.7)',
+  glassEdgeSoft: 'rgba(255, 255, 255, 0.35)',
+
+  /**
+   * A whisper of brand teal in the material, so a glass panel belongs to this
+   * app rather than reading as system chrome. Any more and it stops looking
+   * like glass and starts looking like tinted plastic — the tab bar uses the
+   * same value for the same reason.
+   */
+  glassTint: 'rgba(47, 126, 134, 0.06)',
 } as const;
 
 /**

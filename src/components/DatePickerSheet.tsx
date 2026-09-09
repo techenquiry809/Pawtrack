@@ -37,6 +37,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Icon } from '@/components/Icon';
+import { GlassBackdrop } from '@/components/GlassBackdrop';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { localDayKey } from '@/utils/time';
 
@@ -190,6 +191,9 @@ export function DatePickerSheet({
       <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close">
         {/* Swallows taps so a press inside the sheet does not dismiss it. */}
         <Pressable style={styles.sheet} onPress={() => {}}>
+          {/* Absolutely positioned and pointerEvents="none", so it cannot
+              intercept the tap-swallowing this Pressable exists to do. */}
+          <GlassBackdrop radius={radius.sheet} />
           <View style={styles.headerRow}>
             <Text style={styles.title}>{title}</Text>
             <Pressable
@@ -420,9 +424,11 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   sheet: {
-    backgroundColor: colors.card,
+    // See CheckinCalendar: the surface belongs to GlassBackdrop, which paints
+    // colors.card itself when Reduce Transparency is on.
     borderRadius: radius.sheet,
     padding: spacing.lg,
+    overflow: 'hidden',
   },
 
   headerRow: {

@@ -114,6 +114,56 @@ test('formatTimeOfDay gets midnight and noon right', () => {
   assert.equal(formatTimeOfDay('12:30'), '12:30 pm');
 });
 
+/**
+ * ARBITRARY MINUTES, NOT JUST MULTIPLES OF FIVE.
+ *
+ * The reminder picker used to step minutes in fives and SNAPPED an existing
+ * value to that grid on open, so a 07:07 reminder silently became 07:05. The
+ * step is now one and the snapping is gone, which means every minute 00-59 can
+ * reach this formatter for the first time.
+ *
+ * Nothing here changed to allow that — padStart has always handled it — but
+ * nothing proved it either, and "the display was fine before" is not evidence
+ * about values that could not previously occur.
+ */
+test('formatTimeOfDay renders every off-grid minute', () => {
+  assert.equal(formatTimeOfDay('07:07'), '7:07 am');
+  assert.equal(formatTimeOfDay('06:47'), '6:47 am');
+  assert.equal(formatTimeOfDay('07:23'), '7:23 am');
+  assert.equal(formatTimeOfDay('00:01'), '12:01 am');
+  assert.equal(formatTimeOfDay('12:01'), '12:01 pm');
+  assert.equal(formatTimeOfDay('23:59'), '11:59 pm');
+  // The single-digit minute is the one that would expose a lost padStart.
+  assert.equal(formatTimeOfDay('09:09'), '9:09 am');
+});
+
+test('formatTimeOfDay round-trips all 1440 minutes of the day', () => {
+  // Exhaustive rather than sampled: the whole point of the change is that the
+  // input space went from 288 reachable values to 1440, so check all of them.
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m++) {
+      const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      const out = formatTimeOfDay(hhmm);
+      assert.notEqual(out, hhmm, `${hhmm} was rejected as unparseable`);
+      assert.match(out, /^(1[0-2]|[1-9]):[0-5]\d (am|pm)$/, hhmm);
+      // The minute must survive verbatim — this is what a truncation or a
+      // rounding step would break, and it would break it silently.
+      assert.equal(out.split(':')[1].slice(0, 2), String(m).padStart(2, '0'), hhmm);
+    }
+  }
+});
+
+test('reminder times sort chronologically as plain strings', () => {
+  // Both the SQL ORDER BY and the two in-memory sorts rely on this: zero-padded
+  // HH:MM compares lexicographically in clock order. Odd minutes must not
+  // disturb it, or a dose list renders out of sequence.
+  const times = ['07:23', '07:07', '23:59', '00:01', '07:05', '12:00', '06:47'];
+  assert.deepEqual(
+    [...times].sort((a, b) => a.localeCompare(b)),
+    ['00:01', '06:47', '07:05', '07:07', '07:23', '12:00', '23:59'],
+  );
+});
+
 test('formatTimeOfDay hands back anything it cannot parse', () => {
   // Visible nonsense beats a plausible wrong time on a medication screen.
   for (const bad of ['', 'nope', '25:00', '10:75', '8', '8:00 pm']) {

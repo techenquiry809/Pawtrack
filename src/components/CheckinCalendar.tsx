@@ -37,6 +37,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Body, Button, Heading, Muted, Pill } from '@/components/ui';
 import { Icon } from '@/components/Icon';
+import { GlassBackdrop } from '@/components/GlassBackdrop';
 import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import { formatFullDate, localDayKey } from '@/utils/time';
 import type { DailyCheckin } from '@/types/domain';
@@ -152,6 +153,9 @@ export function CheckinCalendar({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.scrim}>
         <View style={styles.sheet}>
+          {/* First child, absolutely positioned, takes no touches — the frosted
+              material the sheet sits on. See components/GlassBackdrop.tsx. */}
+          <GlassBackdrop radius={radius.sheet} />
           <View style={styles.headerRow}>
             <Heading>Check-in history</Heading>
             <Pressable
@@ -487,9 +491,12 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   sheet: {
-    backgroundColor: colors.card,
+    // No backgroundColor: GlassBackdrop owns the surface, and an opaque fill
+    // here would sit in front of the blur and cancel it. It restores this exact
+    // colour itself under Reduce Transparency.
     borderRadius: radius.sheet,
     padding: spacing.lg,
+    overflow: 'hidden',
   },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   close: { fontSize: 18, color: colors.inkSoft, paddingHorizontal: 4, fontFamily: fontFamily.regular },

@@ -51,7 +51,7 @@ import * as Haptics from 'expo-haptics';
 import { Icon, type IconName } from '@/components/Icon';
 import { colors, fontFamily, fontSize, radius, spacing } from '@/theme/tokens';
 import { RECORD_OVERHANG, useChromeMetrics } from '@/theme/chrome';
-import { useGlassSupport } from '@/theme/glass';
+import { ANDROID_BLUR_METHOD, useGlassSupport } from '@/theme/glass';
 import { useActiveDog, useAppStore } from '@/store/appStore';
 import { useActiveSeizure } from '@/store/activeSeizureStore';
 
@@ -255,6 +255,11 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
               <BlurView
                 intensity={Platform.OS === 'ios' ? 60 : 32}
                 tint="light"
+                // REQUIRED on Android. expo-blur's `blurMethod` defaults to
+                // 'none', so until this was passed the Android bar was a flat
+                // white wash with no blur behind it at all — the wash was
+                // carrying the whole effect. See theme/glass.ts.
+                blurMethod={ANDROID_BLUR_METHOD}
                 style={StyleSheet.absoluteFill}
               />
               <View style={styles.islandTint} />
