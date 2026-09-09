@@ -56,7 +56,7 @@
  * ── WHAT THIS DOES ON EACH PLATFORM ───────────────────────────────────
  *
  *   Android  Repoints Theme.App.SplashScreen at @color/activityBackground and
- *            DELETES the placeholder PNGs, so the asset cannot come back by
+ *            BLANKS the placeholder PNGs, so the artwork cannot come back by
  *            being referenced from somewhere this plugin does not read. A plain
  *            colour windowBackground is also what Android 12+ wants: the system
  *            splash screen adopts a single-colour windowBackground as its own
@@ -104,6 +104,40 @@ const LAUNCH_BACKGROUND_REF = '@color/activityBackground';
 
 const PLACEHOLDER_DRAWABLE = 'splashscreen_logo.png';
 
+/**
+ * A 1x1 fully transparent PNG, 68 bytes, base64.
+ *
+ * ── WHY THE PLACEHOLDER IS BLANKED AND NOT DELETED ────────────────────
+ *
+ * It WAS deleted. That failed the EAS build in `processReleaseResources`,
+ * because res/drawable/ic_launcher_background.xml — dead scaffolding from the
+ * bare template, referenced by nothing, since the adaptive icon resolves
+ * `@mipmap/ic_launcher_background` instead — still contained:
+ *
+ *     <item><bitmap android:src="@drawable/splashscreen_logo"/></item>
+ *
+ * AAPT compiles EVERY file under res/, reachable or not, so a dangling
+ * reference inside an unreachable resource is still a hard failure.
+ *
+ * The obvious repair — chase that reference too — is the weaker fix twice
+ * over. It only knows about the references that exist in TODAY's template, and
+ * verifying it is genuinely awkward: dangerous mods run BEFORE withAndroidStyles
+ * in Expo's pipeline, so a plugin that scans res/ for leftover references reads
+ * a styles.xml this same plugin has not rewritten yet and fails on its own
+ * pending work. (Observed. That is what this comment is buying.)
+ *
+ * Overwriting sidesteps the entire class. Every reference — the launch theme,
+ * the orphaned icon background, and any a future template invents — stays
+ * valid and resolves to nothing visible. There is no ordering to get right and
+ * no reference graph to keep in step, because the artwork is simply no longer
+ * in the file.
+ *
+ * Written as base64 rather than generated, so the bytes that ship are the exact
+ * bytes verified here (1x1, RGBA, alpha 0) and cannot vary with a zlib version.
+ */
+const BLANK_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=';
+
 /* ------------------------------------------------------------------ */
 /* Android — the launch theme                                          */
 /* ------------------------------------------------------------------ */
@@ -137,25 +171,28 @@ function useFlatLaunchBackground(styles) {
 }
 
 /**
- * Removes the placeholder from every density bucket.
+ * Overwrites the placeholder in every density bucket with a blank pixel.
  *
- * Belt and braces next to the style edit above: the drawable is what actually
- * flashed, so it should not survive in the APK for some other reference — a
- * library manifest, a future template change — to find.
+ * Belt and braces next to the style edit above. The theme no longer points at
+ * this drawable, but the file is what actually flashed, and something else
+ * referencing it — now or after a template bump — must not be able to put it
+ * back on screen. See BLANK_PNG_BASE64 for why this overwrites rather than
+ * deletes.
  */
-function deletePlaceholderDrawables(resDir) {
-  const removed = [];
-  if (!fs.existsSync(resDir)) return removed;
+function blankPlaceholderDrawables(resDir) {
+  const blanked = [];
+  if (!fs.existsSync(resDir)) return blanked;
 
+  const blank = Buffer.from(BLANK_PNG_BASE64, 'base64');
   for (const entry of fs.readdirSync(resDir)) {
     if (!entry.startsWith('drawable')) continue;
     const file = path.join(resDir, entry, PLACEHOLDER_DRAWABLE);
     if (fs.existsSync(file)) {
-      fs.rmSync(file);
-      removed.push(file);
+      fs.writeFileSync(file, blank);
+      blanked.push(file);
     }
   }
-  return removed;
+  return blanked;
 }
 
 /* ------------------------------------------------------------------ */
@@ -215,7 +252,7 @@ const withLaunchScreen = (config) => {
   next = withDangerousMod(next, [
     'android',
     (cfg) => {
-      deletePlaceholderDrawables(
+      blankPlaceholderDrawables(
         path.join(cfg.modRequest.platformProjectRoot, 'app/src/main/res'),
       );
       return cfg;
@@ -244,6 +281,6 @@ const withLaunchScreen = (config) => {
 
 module.exports = withLaunchScreen;
 module.exports.useFlatLaunchBackground = useFlatLaunchBackground;
-module.exports.deletePlaceholderDrawables = deletePlaceholderDrawables;
+module.exports.blankPlaceholderDrawables = blankPlaceholderDrawables;
 module.exports.LAUNCH_COLOR = LAUNCH_COLOR;
 module.exports.LAUNCH_BACKGROUND_REF = LAUNCH_BACKGROUND_REF;
