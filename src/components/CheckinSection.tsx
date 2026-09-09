@@ -23,14 +23,14 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { Body, Button, Card, Heading, Muted, Pill } from '@/components/ui';
 import { CheckinCalendar } from '@/components/CheckinCalendar';
 import { TodaysDoses } from '@/components/TodaysDoses';
 import { Icon } from '@/components/Icon';
-import { colors, fontFamily, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
+import { colors, fontFamily, fontSize, MIN_TOUCH_TARGET, radius, spacing } from '@/theme/tokens';
 import * as checkinRepo from '@/db/checkinRepo';
 import * as videoRepo from '@/db/videoRepo';
 import { localDayKey } from '@/utils/time';
@@ -82,10 +82,15 @@ export function CheckinSection({ dogId, dogName }: { dogId: string; dogName: str
       <Card>
         <View style={styles.row}>
           <Heading>Today</Heading>
-          <Pill
-            label={existing ? (existing.backfilled ? 'Filled in later' : 'Saved') : 'Not yet'}
-            tone={existing ? (existing.backfilled ? 'teal' : 'green') : 'amber'}
-          />
+          {/*
+            The pill is shown only when it says something the control below it
+            does not. "Not yet" and "Filled in later" both do; a green "Saved"
+            over a green "Updated ✓" is the same fact twice, six points apart,
+            and the eye reads the repetition as two different states before it
+            reads the words.
+          */}
+          {!existing && <Pill label="Not yet" tone="amber" />}
+          {existing?.backfilled && <Pill label="Filled in later" tone="teal" />}
         </View>
         <Muted style={styles.hint}>
           {existing
@@ -93,13 +98,17 @@ export function CheckinSection({ dogId, dogName }: { dogId: string; dogName: str
             : 'Five short questions, about thirty seconds. Every one is optional.'}
         </Muted>
 
-        <Button
-          label={existing ? 'Update today' : 'Start check-in'}
-          onPress={() => open(today)}
-          disabled={!loaded}
-          accessibilityHint="Opens the check-in questions"
-          style={styles.startBtn}
-        />
+        {existing ? (
+          <RecordedToday onPress={() => open(today)} disabled={!loaded} />
+        ) : (
+          <Button
+            label="Start check-in"
+            onPress={() => open(today)}
+            disabled={!loaded}
+            accessibilityHint="Opens the check-in questions"
+            style={styles.startBtn}
+          />
+        )}
       </Card>
 
       {/*
@@ -142,11 +151,125 @@ export function CheckinSection({ dogId, dogName }: { dogId: string; dogName: str
   );
 }
 
+/**
+ * Today, once it has been recorded.
+ *
+ * ── WHY THIS IS NOT THE PRIMARY BUTTON ────────────────────────────────
+ *
+ * It was: the same saturated teal fill as "Start check-in", relabelled "Update
+ * today". A filled primary button is the app asking for something, and it went
+ * on asking after the owner had already done it — the strongest control on the
+ * screen, pointed at the one task with nothing left to do. On a daily ritual
+ * that reads as nagging, and it hides the answer to the question the owner
+ * actually opened the tab with, which is "did I do this today?".
+ *
+ * So the control now ANSWERS first and offers second. The tick and the word
+ * are the state; the line under them is the affordance. It is still one tap
+ * into the same flow — an owner who wants to change an answer must never have
+ * to hunt for the way back in — but it no longer competes for attention with
+ * the doses and the missed-days row below it.
+ *
+ * ── THE VISUAL RULES IT FOLLOWS ───────────────────────────────────────
+ *
+ * Green, not teal. Teal is this app's ACTION colour, on every primary button
+ * and every link; green is reserved for status — see the note on the event
+ * palette in theme/tokens.ts, which frees green for exactly this by keeping
+ * amber as the warning hue for red-green colour-blind readers.
+ *
+ * The tick is a glyph on a tinted disc rather than a bare mark, so the state
+ * survives a screenshot at arm's length and does not rely on colour alone: the
+ * word "Updated" carries the same meaning with the hue removed entirely.
+ *
+ * `radius.card` on a control this tall on purpose. `radius.control` is 100 —
+ * fully round — which is right for a single-line button and collapses a
+ * two-line box into a lozenge, the same trap `radius.field` exists to avoid.
+ */
+function RecordedToday({
+  onPress,
+  disabled,
+}: {
+  onPress: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      // The role already says "button", so the label carries the state and the
+      // hint carries the action — a screen reader announces what is true before
+      // it announces what is possible, in the same order as the visual design.
+      accessibilityLabel="Today's check-in is updated"
+      accessibilityHint="Opens the check-in questions to change today's answers"
+      accessibilityState={{ disabled }}
+      style={({ pressed }) => [
+        styles.recorded,
+        pressed && styles.pressed,
+        disabled && styles.recordedDisabled,
+      ]}
+    >
+      <View style={styles.recordedTick}>
+        <Icon name="check" size="md" color={colors.greenInk} />
+      </View>
+
+      <View style={styles.recordedText}>
+        <Text style={styles.recordedTitle}>Updated</Text>
+        <Text style={styles.recordedHint}>Tap to change today’s answers</Text>
+      </View>
+
+      <Icon name="chevron" size="md" color={colors.green} />
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   hint: { marginTop: 4 },
   startBtn: { marginTop: spacing.md },
   pressed: { opacity: 0.9, transform: [{ scale: 0.98 }] },
+
+  recorded: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    // Tinted fill plus a hairline of the full-strength hue. The tint alone
+    // floats on the card's white; the border is what gives it an edge to sit
+    // on without the weight of a shadow, which would claim it is a raised
+    // control the way the primary button is.
+    backgroundColor: colors.greenTint,
+    borderWidth: 1,
+    borderColor: colors.green,
+    borderRadius: radius.card,
+    // The box is already well over MIN_TOUCH_TARGET from its padding; stated
+    // anyway so a future padding change cannot quietly shrink it under 48.
+    minHeight: MIN_TOUCH_TARGET,
+  },
+  // Only while the day's records are still loading, which is a blink. Dimmed
+  // rather than restyled, so nothing moves when it becomes live.
+  recordedDisabled: { opacity: 0.6 },
+  recordedTick: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg,
+  },
+  recordedText: { flex: 1 },
+  recordedTitle: {
+    fontFamily: fontFamily.bold,
+    fontSize: fontSize.md,
+    color: colors.greenInk,
+  },
+  recordedHint: {
+    marginTop: 2,
+    fontFamily: fontFamily.regular,
+    fontSize: fontSize.sm,
+    color: colors.inkSoft,
+  },
   calendarBtn: {
     flexDirection: 'row',
     alignItems: 'center',

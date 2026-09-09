@@ -54,7 +54,7 @@ import * as checkinRepo from '@/db/checkinRepo';
 import * as medicationRepo from '@/db/medicationRepo';
 import * as videoRepo from '@/db/videoRepo';
 import { GalleryHeader, VideoGallery } from '@/components/VideoGallery';
-import { DAY_MS, formatDuration, formatShortDate, hasKnownTime, timeOfDay } from '@/utils/time';
+import { DAY_MS, formatDuration, formatShortDate, timeOfDay } from '@/utils/time';
 import {
   buildEvents, dayLabel, groupByDay,
   type TimelineEvent, type TimelineEventKind,
@@ -488,14 +488,19 @@ function EventRow({
   onPress?: () => void;
 }) {
   const meta = KIND_META[event.kind];
-  // Null on a seizure the owner could not time — its timestamp is the start of
-  // that day, and the row is already filed under that day's heading, so there
-  // is nothing left to say. Doses and check-ins carry no timingConfidence and
-  // their timestamps are always real.
-  const time = timeOfDay(
-    event.timestamp,
-    event.timingConfidence === undefined || hasKnownTime(event.timingConfidence),
-  );
+  /*
+   * Null on anything whose timestamp is a sorting key rather than an
+   * observation — a seizure the owner could not time, or a check-in filled in
+   * for a past day. Both are already filed under the right day heading, so
+   * there is nothing left to say, and printing the sentinel would state a time
+   * nobody observed.
+   *
+   * WHICH events those are is decided in features/timeline, by the code that
+   * knows what each kind's timestamp means. This used to be inferred here from
+   * `timingConfidence === undefined`, which quietly asserted that every dose
+   * and check-in carries a real clock time — see the note on `showTime`.
+   */
+  const time = timeOfDay(event.timestamp, event.showTime);
   // Absence of a duration, not low confidence in one — an owner-stated length on
   // an imported record is 'unreliable' by design and must still be shown.
   const untimed = event.durationSec === undefined || event.durationSec === 0;
@@ -525,7 +530,16 @@ function EventRow({
                 tone={durationTone(event.durationSec, event.durationConfidence, settings)}
               />
             )}
-            {event.retrospective && <Pill label="Logged later" tone="neutral" />}
+            {/* "Filled in later" is the wording the check-in surfaces already
+                use — the pill on the Today card and the one on the calendar's
+                day summary. A third phrase for the same fact would read as a
+                third fact. */}
+            {event.retrospective && (
+              <Pill
+                label={event.kind === 'checkin' ? 'Filled in later' : 'Logged later'}
+                tone="neutral"
+              />
+            )}
             {event.durationConfidence === 'recovered' && (
               <Pill label="Estimated duration" tone="amber" />
             )}
@@ -540,7 +554,15 @@ function EventRow({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${meta.label} at ${time}. ${event.detail}`}
+      // `time` is null whenever the timestamp is a sorting key rather than an
+      // observation, and interpolating that read out as "Seizure at null" —
+      // the one audience that cannot see the row is the one that was told a
+      // nonsense time.
+      accessibilityLabel={
+        time === null
+          ? `${meta.label}. ${event.detail}`
+          : `${meta.label} at ${time}. ${event.detail}`
+      }
       style={({ pressed }) => (pressed ? styles.pressed : undefined)}
     >
       {content}

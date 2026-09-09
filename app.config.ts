@@ -6,7 +6,7 @@ const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID ?? BUNDLE_ID;
 const config: ExpoConfig = {
   name: 'PawTrack',
   slug: 'pawtrack',
-  version: '1.0.0',
+  version: '1.0.2',
   orientation: 'portrait',
   scheme: 'pawtrack', // enables deep links, required by expo-router
   userInterfaceStyle: 'light',
@@ -33,18 +33,28 @@ const config: ExpoConfig = {
 
   /*
    * There is deliberately no `splash` block. SDK 57 moved that config to the
-   * expo-splash-screen plugin, which this project does not depend on, and the
-   * pre-JS window is already handled by `backgroundColor` above. The residual
-   * step is white (the generated splashscreen_background) to cream, which is
-   * mild; closing it fully means adding that package.
+   * expo-splash-screen plugin, which this project does not depend on.
    *
-   * A brand image is not the missing piece either. Every raster this project
+   * ── WHAT THAT COST, AND WHAT NOW PAYS IT ──────────────────────────────
+   *
+   * The note that used to sit here said the residual step was "white to cream,
+   * which is mild". It was not white. With no expo-splash-screen plugin to
+   * overwrite it, the launch theme kept pointing at the PLACEHOLDER artwork
+   * that ships inside expo/template.tgz — a grey wireframe grid, stretched
+   * full-bleed — and that shipped to Play as the first thing anyone saw.
+   *
+   * ./plugins/withLaunchScreen closes it without the dependency: the launch
+   * window on both platforms is now the flat `backgroundColor` above, and the
+   * placeholder drawable is deleted rather than merely unreferenced. That
+   * plugin carries the full reasoning, including why the launch screen is a
+   * colour and not a still frame of the intro.
+   *
+   * A brand raster is still not the missing piece. Every one this project
    * ships — icon.png, splash-icon.png, android-icon-foreground.png — draws the
    * paw in WHITE for a blue or transparent ground, so on #F6F2EA the paw
    * vanishes and only the blue pulse trace survives, reading as a stray
-   * squiggle rather than a logo. The animated mark in
-   * src/components/AnimatedSplash.tsx is drawn from the app's own icon set in
-   * theme colours instead, which needs no new asset.
+   * squiggle rather than a logo. The branded intro is the video in
+   * src/components/AnimatedSplash.tsx, which fades up out of this same cream.
    */
 
   ios: {
@@ -209,6 +219,15 @@ const config: ExpoConfig = {
       A no-op unless APPLE_PERSONAL_TEAM=1.
     */
     './plugins/withPersonalTeamEntitlements',
+
+    /*
+     * The pre-JS launch window, on both platforms. Registered EARLY — i.e. it
+     * runs LATE, by the wrapping rule described above — because its Android
+     * half rewrites `Theme.App.SplashScreen` and deletes the template's
+     * placeholder drawable, and both edits must land after anything else that
+     * touches styles or res/. See the file for what was flashing and why.
+     */
+    './plugins/withLaunchScreen',
 
     'expo-router',
     [

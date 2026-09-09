@@ -19,6 +19,10 @@
 
 import { create } from 'zustand';
 import { Platform } from 'react-native';
+// Read only to name the applicationId in the Google misconfiguration log
+// below. Everything else this store needs from the config comes through
+// services/supabase, which does the `extra` unwrapping in one place.
+import Constants from 'expo-constants';
 import type { Session, User } from '@supabase/supabase-js';
 import {
   getSupabase,
@@ -37,6 +41,7 @@ import { useConsentStore } from './consentStore';
 import {
   describeAuthError,
   isExistingAccountSignUp,
+  isProviderMisconfiguration,
   type AuthErrorNotice,
 } from '@/services/authErrors';
 import {
@@ -548,6 +553,37 @@ export const useAuthStore = create<AuthState>((set) => ({
       });
       if (error) throw new Error(error.message);
     } catch (e) {
+      /*
+       * The owner gets the calm version; whoever has to FIX it gets the facts.
+       *
+       * DEVELOPER_ERROR is the one auth failure with no diagnosis visible from
+       * inside the app — Play Services will not say which of the applicationId,
+       * the signing certificate or the client id it disliked, and the message
+       * the owner is shown deliberately says none of it. Every time this was
+       * hit, the next half hour went on rediscovering which values were even in
+       * play, so the store prints them.
+       *
+       * NOT gated on __DEV__. A release build installed from a Play test track
+       * is exactly where this surfaces, and `adb logcat` is the only instrument
+       * anyone has there. Nothing here is a secret: the client id is public by
+       * design (see the note in app.config.ts) and the package name is on the
+       * store listing.
+       */
+      if (isProviderMisconfiguration(e)) {
+        console.error(
+          '[auth] Google sign-in rejected this build. No OAuth client in the ' +
+            'Google Cloud project matches it. Check, in order: an Android ' +
+            'client exists for this package name; its SHA-1 is the certificate ' +
+            'this build is actually signed with (Play App Signing re-signs the ' +
+            'AAB, so the Play console fingerprint is the one that counts, not ' +
+            'the upload key); the web client id below is the one set as ' +
+            "Supabase's Authorized Client ID. See docs/GOOGLE_SIGNIN.md.",
+          {
+            package: Constants.expoConfig?.android?.package ?? '(unknown)',
+            webClientId: GOOGLE_WEB_CLIENT_ID || '(EMPTY — never reached the build)',
+          },
+        );
+      }
       // Previously this set the raw thrown message with no cancellation check,
       // so dismissing the Google sheet raised a red panel reading things like
       // "DEVELOPER_ERROR" at someone who had simply changed their mind.

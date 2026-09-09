@@ -28,12 +28,24 @@
  *   MAX_INTRO_MS   a ceiling, for a file that fails to decode or a startup
  *                  that never reports. Never reached in normal operation.
  *
- * ── AND IT FADES ──────────────────────────────────────────────────────
+ * ── AND IT FADES, AT BOTH ENDS ────────────────────────────────────────
  *
  * Cutting from a full-bleed video to the Home screen in one frame reads as the
  * app restarting. The fade is short enough not to be a wait and long enough to
  * be a handoff. Skipped under Reduce Motion, where the swap is instant — see
  * src/theme/motion.ts on why that setting is honoured rather than negotiated.
+ *
+ * The fade IN exists for a different reason. What is on screen before this
+ * component mounts is the native launch window, which plugins/withLaunchScreen
+ * makes a flat `colors.bg` cream — a video whose first frame is a deep navy
+ * gradient cannot cut into that without a hard step. So the video rises out of
+ * the same cream, and the cold start is one continuous move rather than three
+ * stacked screens.
+ *
+ * It is also a correctness guard, not only a polish one: VideoView paints an
+ * empty surface until the decoder produces a frame, so revealing it on mount
+ * risks a black rectangle in front of a cream app. The reveal is therefore
+ * driven by `readyToPlay`, not by a timer — see FADE_IN_MS.
  *
  * ── contentFit="cover", NOT "contain" ─────────────────────────────────
  *
@@ -70,6 +82,30 @@ const MIN_INTRO_MS = 700;
 /** The handoff. Matches `duration.enter` in the motion tokens. */
 const FADE_MS = 320;
 
+/**
+ * The reveal, from the cream launch window into the clip's first frame.
+ *
+ * Shorter than FADE_MS on purpose. The fade OUT is covering a change of
+ * context — intro to app — and wants to be felt. This one is covering a change
+ * of colour on a screen the owner has been looking at for a few hundred
+ * milliseconds, and only wants to not be seen.
+ */
+const FADE_IN_MS = 220;
+
+/**
+ * THERE IS DELIBERATELY NO TIMER BEHIND THE REVEAL.
+ *
+ * The obvious safety net — reveal anyway after N ms — is the wrong net for this
+ * failure. A player that has not reported ready has, by definition, no frame to
+ * show, so the timer would swap a cream screen for an undefined surface and
+ * make a silent degradation into a visible one.
+ *
+ * Not revealing costs nothing the owner can perceive: the layer stays cream,
+ * over an app whose background is the same cream, and startup proceeds
+ * underneath exactly as it always does. The only loss is the intro, which is
+ * the thing that was already broken.
+ */
+
 export function AnimatedSplash({
   canFinish,
   onFinish,
@@ -85,6 +121,16 @@ export function AnimatedSplash({
   const mountedAt = useRef(Date.now());
   const opacity = useRef(new Animated.Value(1)).current;
   const reducedMotion = useReducedMotion();
+
+  /**
+   * The video layer alone, separate from `opacity` above.
+   *
+   * They cannot share one value: the container's cream is what the reveal fades
+   * up FROM, so it has to stay opaque while the video appears, and then leave
+   * with it. Two values, two jobs.
+   */
+  const videoOpacity = useRef(new Animated.Value(0)).current;
+  const revealedRef = useRef(false);
 
   const player = useVideoPlayer(SPLASH_VIDEO, (instance) => {
     instance.loop = false;
@@ -112,12 +158,53 @@ export function AnimatedSplash({
     }).start(() => onFinish());
   };
 
+  /**
+   * Bring the video up out of the cream. Idempotent, because there are two
+   * callers for one event: the status listener below, and the status read that
+   * covers a player already ready before the listener was attached.
+   */
+  const reveal = useRef<() => void>(() => {});
+  reveal.current = () => {
+    if (revealedRef.current) return;
+    revealedRef.current = true;
+
+    if (reducedMotion) {
+      videoOpacity.setValue(1);
+      return;
+    }
+    Animated.timing(videoOpacity, {
+      toValue: 1,
+      duration: FADE_IN_MS,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  };
+
   // The clip ending, a decode failure, and the ceiling. All still apply.
   useEffect(() => {
     const playToEndSub = player.addListener('playToEnd', () => leave.current());
     const statusSub = player.addListener('statusChange', ({ status }) => {
+      /*
+       * Ready is the cue to fade the video in. Error is the cue to leave, and
+       * pointedly NOT to reveal: a failed player's surface is undefined — a
+       * black rectangle on Android — and fading that in front of a cream app
+       * would turn a silent degradation into a visible fault. Left at zero the
+       * layer is cream over cream, and the failure costs the owner nothing but
+       * the intro they cannot miss what they never saw.
+       */
       if (status === 'error') leave.current();
+      else if (status === 'readyToPlay') reveal.current();
     });
+
+    /*
+     * Mount can land AFTER the player is already ready — `useVideoPlayer` runs
+     * its setup callback during render and a cached local file can decode
+     * before this effect subscribes. The listener would then never fire for a
+     * transition that already happened, so the current status is read once
+     * here. This is the ordinary path on a warm start, not an edge case.
+     */
+    if (player.status === 'readyToPlay') reveal.current();
+
     const timeout = setTimeout(() => leave.current(), MAX_INTRO_MS);
 
     return () => {
@@ -143,13 +230,15 @@ export function AnimatedSplash({
 
   return (
     <Animated.View style={[styles.container, { opacity }]} pointerEvents="none">
-      <VideoView
-        style={styles.video}
-        player={player}
-        contentFit="cover"
-        nativeControls={false}
-        allowsPictureInPicture={false}
-      />
+      <Animated.View style={[styles.video, { opacity: videoOpacity }]}>
+        <VideoView
+          style={styles.video}
+          player={player}
+          contentFit="cover"
+          nativeControls={false}
+          allowsPictureInPicture={false}
+        />
+      </Animated.View>
     </Animated.View>
   );
 }

@@ -83,6 +83,35 @@ function messageOf(e: unknown): string {
 }
 
 /**
+ * Google's "your OAuth setup is wrong", by any of its spellings.
+ *
+ * DEVELOPER_ERROR is raised by Play Services when the app asking for a token
+ * does not match any OAuth client in the Google Cloud project. It is ALWAYS a
+ * build-configuration fault and never anything the owner did, and its three
+ * causes are all invisible from inside the app:
+ *
+ *   - no Android OAuth client for this applicationId at all
+ *   - a client whose package name is stale — this app's applicationId changed
+ *     from com.pawtrack.app to com.pawtrack.ausasi during release prep, and a
+ *     client left on the old name produces exactly this
+ *   - a client whose SHA-1 is not the certificate the running build is signed
+ *     with. Play App Signing re-signs the uploaded AAB with Google's own key,
+ *     so a build installed from Play has a DIFFERENT fingerprint from the one
+ *     that left this machine, and both have to be registered
+ *
+ * Exported so the store can say all of that to the developer's console while
+ * the owner is shown the calm version. See docs/GOOGLE_SIGNIN.md.
+ */
+export function isProviderMisconfiguration(e: unknown): boolean {
+  const code = codeOf(e);
+  return (
+    code === 'DEVELOPER_ERROR' ||
+    code === '10' ||
+    messageOf(e).toLowerCase().includes('developer_error')
+  );
+}
+
+/**
  * Did the owner back out of the system sheet?
  *
  * The two SDKs disagree on how to say so, and neither is documented in one
@@ -170,7 +199,7 @@ export function describeAuthError(
   // DEVELOPER_ERROR / code 10 is Google telling us the client ids or the
   // signing certificate do not line up. Nothing the owner does will fix it,
   // so it must not offer a retry or blame their account.
-  if (code === 'DEVELOPER_ERROR' || code === '10' || m.includes('developer_error')) {
+  if (isProviderMisconfiguration(e)) {
     return {
       title: `${name} sign-in is not set up correctly`,
       body:
